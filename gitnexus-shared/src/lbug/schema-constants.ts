@@ -21,6 +21,7 @@ export const NODE_TABLES = [
   'Section',
   'Struct',
   'Enum',
+  'EnumVariant',
   'Macro',
   'Typedef',
   'Union',
@@ -67,6 +68,12 @@ export const REL_TYPES = [
   'ENTRY_POINT_OF',
   'WRAPS',
   'QUERIES',
+  // Move/Aptos edges (compiler-first via move-flow `facts` query)
+  'FRIEND_OF',
+  'READS_RESOURCE',
+  'WRITES_RESOURCE',
+  'ACQUIRES',
+  'EMITS',
 ] as const;
 
 export type RelType = (typeof REL_TYPES)[number];

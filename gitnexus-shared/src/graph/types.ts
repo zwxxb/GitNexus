@@ -44,7 +44,10 @@ export type NodeLabel =
   | 'Template'
   | 'Section'
   | 'Route'
-  | 'Tool';
+  | 'Tool'
+  // Move/Aptos: one EnumVariant node per Move 2 enum variant, linked to its
+  // Enum via CONTAINS. Sourced from the move-flow `facts` query.
+  | 'EnumVariant';
 
 export type NodeProperties = {
   name: string;
@@ -89,6 +92,47 @@ export type NodeProperties = {
   responseKeys?: string[];
   errorKeys?: string[];
   middleware?: string[];
+  // ── Move/Aptos (compiler-first, sourced from the move-flow `facts` query) ──
+  // All fields below are populated by the thin facts→graph mapper. They are
+  // optional and additive; non-Move nodes never set them.
+  qualifiedName?: string;
+  moduleQualifiedName?: string;
+  moduleAddress?: string;
+  visibilityModifier?: string;
+  isEntry?: boolean;
+  isView?: boolean;
+  isInitModule?: boolean;
+  isInline?: boolean;
+  isNative?: boolean;
+  isResource?: boolean;
+  isEvent?: boolean;
+  isTest?: boolean;
+  isTestOnly?: boolean;
+  hasSpec?: boolean;
+  /** Subset of {'copy','drop','store','key'} — Move struct/enum abilities. */
+  abilities?: string[];
+  /** Resource qualified names from `acquiresInferred` (move-flow facts). */
+  acquires?: string[];
+  /** Generic type parameters (facts `typeParams`: abilities → constraints). */
+  typeParams?: Array<{ name: string; constraints?: string[]; isPhantom?: boolean }>;
+  /** Resource qualified names reached transitively (move-flow function_usage). */
+  usedTypes?: string[];
+  /** Full attribute name list (`["view","event","test_only",...]`). */
+  attributes?: string[];
+  /** Parsed `#[expected_failure(...)]` payload (true for the bare form). */
+  expectedFailure?: true | Record<string, string>;
+  /** Move 1 vs Move 2 distinction: `'struct'` or `'enum'`. */
+  moveDeclarationKind?: 'struct' | 'enum';
+  /** EnumVariant shape (facts `variants[].kind`). */
+  variantKind?: 'unit' | 'positional' | 'named';
+  /** Struct / variant fields (facts `fields`: name/type/positional). */
+  fields?: Array<{ name: string; type: string; positional?: boolean }>;
+  /**
+   * Node-location precision. `'precise'` = per-symbol file/span from the
+   * move-flow `facts` query; `'package'` = coarse package-root fallback when
+   * only `module_summary` is available (no per-symbol locations).
+   */
+  locationFidelity?: 'precise' | 'package';
   // Extensible
   [key: string]: unknown;
 };
@@ -98,6 +142,7 @@ export type RelationshipType =
   | 'CALLS'
   | 'INHERITS'
   | 'METHOD_OVERRIDES'
+  | 'OVERRIDES'
   | 'METHOD_IMPLEMENTS'
   | 'IMPORTS'
   | 'USES'
@@ -123,6 +168,17 @@ export type RelationshipType =
    *  `reason` encodes the event name: `vue-event: @<eventName>`.
    *  Complements `EMITS_EVENT`; together they enable Cypher queries that
    *  trace which handlers receive which component's emitted events. */
+  // ── Move/Aptos edges (compiler-first via the move-flow `facts` query) ──
+  /** `friend` module declaration: source module → friend module. */
+  | 'FRIEND_OF'
+  /** Function reads a resource (`facts.resourceAccess.reads`). */
+  | 'READS_RESOURCE'
+  /** Function writes a resource (`facts.resourceAccess.writes`). */
+  | 'WRITES_RESOURCE'
+  /** Function acquires a resource (`facts.acquiresInferred`). */
+  | 'ACQUIRES'
+  /** Reserved: function emits an event struct (not yet sourced from facts). */
+  | 'EMITS'
   | 'BINDS_EVENT_HANDLER'
   /** Vue component event system: a component calls `emit('eventName', ...)`
    *  or `this.$emit('eventName', ...)`, advertising that it can emit that event.
