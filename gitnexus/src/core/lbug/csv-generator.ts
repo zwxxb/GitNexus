@@ -80,10 +80,18 @@ const escapeArrayElement = (value: unknown): string => {
     .replace(/'/g, "''");
 };
 
-/** LadybugDB STRING[] literal inside a quoted CSV field. */
+/**
+ * LadybugDB STRING[] literal inside a quoted CSV field. The whole `[...]`
+ * literal is wrapped by escapeCSVField (outer double quotes), so list elements
+ * are emitted BARE — Kùzu keeps any surrounding quotes as part of the string.
+ * Embedded `,` / `]` (rare in Move type strings) are stripped to keep the list
+ * literal well-formed; `\r`/`\n` are sanitized by escapeCSVField.
+ */
 export const escapeCSVStringArray = (value: unknown): string => {
   const items = Array.isArray(value) ? value : [];
-  const literal = `[${items.map((item) => `"${escapeArrayElement(item).replace(/"/g, '""')}"`).join(',')}]`;
+  const literal = `[${items
+    .map((item) => String(item ?? '').replace(/[,\]]/g, ' '))
+    .join(',')}]`;
   return escapeCSVField(literal);
 };
 

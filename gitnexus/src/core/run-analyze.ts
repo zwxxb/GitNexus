@@ -13,6 +13,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { execFileSync } from 'child_process';
 import { runPipelineFromRepo } from './ingestion/pipeline.js';
+import { tryCreateMoveFlowClient } from './move/mcp-client.js';
 import { resetDegradedParseCounter } from './tree-sitter/safe-parse.js';
 import {
   initLbug,
@@ -492,6 +493,11 @@ export async function runFullAnalysis(
   // in-place (cache hits leave entries unchanged; misses add new ones).
   const parseCache = await loadParseCache(storagePath);
 
+  // Compiler-first Move ingestion: create a move-flow client if the binary is
+  // available (returns null otherwise). The `moveIngest` phase no-ops when the
+  // repo has no Move.toml, so this is safe to pass unconditionally.
+  const moveFlowClient = tryCreateMoveFlowClient();
+
   // ── Phase 1: Full Pipeline (0–60%) ────────────────────────────────
   const pipelineResult = await runPipelineFromRepo(
     repoPath,
@@ -506,8 +512,12 @@ export async function runFullAnalysis(
     {
       parseCache,
       workerPoolSize: options.workerPoolSize,
+      moveFlowClient,
     },
   );
+
+  // Release the move-flow child process once ingestion has consumed it.
+  await moveFlowClient?.shutdown();
 
   // ── Phase 2: LadybugDB (60–85%) ──────────────────────────────────
   progress('lbug', 60, 'Loading into LadybugDB...');

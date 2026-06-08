@@ -10,4 +10,7 @@ export const FTS_INDEXES: readonly FTSIndexDefinition[] = [
   { table: 'Class', indexName: 'class_fts', properties: ['name', 'content'] },
   { table: 'Method', indexName: 'method_fts', properties: ['name', 'content'] },
   { table: 'Interface', indexName: 'interface_fts', properties: ['name', 'content'] },
+  // Move/Aptos: make resources/structs and modules searchable.
+  { table: 'Struct', indexName: 'struct_fts', properties: ['name', 'content'] },
+  { table: 'Module', indexName: 'module_fts', properties: ['name', 'content'] },
 ];
