@@ -38,6 +38,8 @@ describe('BM25 search', () => {
         ['Class', 'class_fts', ['name', 'content']],
         ['Method', 'method_fts', ['name', 'content']],
         ['Interface', 'interface_fts', ['name', 'content']],
+        ['Struct', 'struct_fts', ['name', 'content']],
+        ['Module', 'module_fts', ['name', 'content']],
       ]);
     });
 
@@ -48,7 +50,7 @@ describe('BM25 search', () => {
       const missing = await verifySearchFTSIndexes(executeQuery);
 
       expect(missing).toEqual([]);
-      expect(executeQuery).toHaveBeenCalledTimes(5);
+      expect(executeQuery).toHaveBeenCalledTimes(7);
     });
 
     it('reports missing indexes when an FTS probe fails', async () => {
@@ -56,6 +58,8 @@ describe('BM25 search', () => {
         .fn()
         .mockResolvedValueOnce([])
         .mockRejectedValueOnce(new Error('index does not exist'))
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([]);
@@ -295,6 +299,8 @@ describe('BM25 search', () => {
         'Class',
         'Method',
         'Interface',
+        'Struct',
+        'Module',
       ]);
     });
   });
