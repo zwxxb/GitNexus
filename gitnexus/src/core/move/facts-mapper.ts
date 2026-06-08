@@ -45,18 +45,23 @@ function stripTypeArgs(typeName: string): string {
   return (idx === -1 ? typeName : typeName.slice(0, idx)).trim();
 }
 
+/** Defensive: move-flow omits optional array fields for some symbols. */
+function arr<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function mapTypeParams(
-  typeParams: MoveFactsTypeParam[],
+  typeParams: MoveFactsTypeParam[] | null | undefined,
 ): Array<{ name: string; constraints?: string[]; isPhantom?: boolean }> {
-  return typeParams.map((tp) => ({
+  return arr(typeParams).map((tp) => ({
     name: tp.name,
-    constraints: tp.abilities,
+    constraints: arr(tp.abilities),
     isPhantom: tp.isPhantom,
   }));
 }
 
-function attributeNames(attributes: { name: string }[]): string[] {
-  return attributes.map((a) => a.name);
+function attributeNames(attributes: { name: string }[] | null | undefined): string[] {
+  return arr(attributes).map((a) => a.name);
 }
 
 /** Make an absolute path repo-relative so node IDs and File-node links align. */
@@ -133,12 +138,12 @@ export function mapFactsToGraph(
       },
     });
 
-    for (const friend of mod.friends) {
+    for (const friend of arr(mod.friends)) {
       pendingFriends.push({ moduleNodeId, friend: friend.module });
     }
 
     // Functions
-    for (const fn of mod.functions) {
+    for (const fn of arr(mod.functions)) {
       const fnQualified = `${moduleQualified}::${fn.name}`;
       const fnFile = relativize(fn.file ?? moduleFileAbs, repoPath);
       const fnNodeId = moveFunctionNodeId(fnQualified, fnFile);
@@ -168,15 +173,15 @@ export function mapFactsToGraph(
           hasSpec: fn.hasSpec,
           attributes: attrs,
           typeParams: mapTypeParams(fn.typeParams),
-          acquires: fn.acquiresInferred,
+          acquires: arr(fn.acquiresInferred),
           returnType: fn.returnType ?? undefined,
-          parameterCount: fn.params.length,
+          parameterCount: arr(fn.params).length,
           locationFidelity: fn.file ? 'precise' : 'package',
         },
       });
       edge(moduleNodeId, fnNodeId, 'DEFINES', 1.0, 'move-module-defines-function');
 
-      for (const r of fn.resourceAccess.reads) {
+      for (const r of arr(fn.resourceAccess?.reads)) {
         pendingResource.push({
           fnNodeId,
           moduleQualified,
@@ -185,7 +190,7 @@ export function mapFactsToGraph(
           qualified: false,
         });
       }
-      for (const w of fn.resourceAccess.writes) {
+      for (const w of arr(fn.resourceAccess?.writes)) {
         pendingResource.push({
           fnNodeId,
           moduleQualified,
@@ -194,7 +199,7 @@ export function mapFactsToGraph(
           qualified: false,
         });
       }
-      for (const a of fn.acquiresInferred) {
+      for (const a of arr(fn.acquiresInferred)) {
         pendingResource.push({
           fnNodeId,
           moduleQualified,
@@ -206,7 +211,7 @@ export function mapFactsToGraph(
     }
 
     // Types (structs + enums)
-    for (const ty of mod.types) {
+    for (const ty of arr(mod.types)) {
       const tyQualified = `${moduleQualified}::${ty.name}`;
       const tyFile = relativize(ty.file ?? moduleFileAbs, repoPath);
       const attrs = attributeNames(ty.attributes);
@@ -225,8 +230,8 @@ export function mapFactsToGraph(
             moduleAddress: address,
             startLine: ty.span?.[0],
             endLine: ty.span?.[1],
-            abilities: ty.abilities,
-            isResource: ty.abilities.includes('key'),
+            abilities: arr(ty.abilities),
+            isResource: arr(ty.abilities).includes('key'),
             isEvent: attrs.includes('event'),
             isTestOnly: attrs.includes('test_only'),
             hasSpec: ty.hasSpec,
@@ -259,7 +264,7 @@ export function mapFactsToGraph(
             moduleAddress: address,
             startLine: ty.span?.[0],
             endLine: ty.span?.[1],
-            abilities: ty.abilities,
+            abilities: arr(ty.abilities),
             hasSpec: ty.hasSpec,
             attributes: attrs,
             typeParams: mapTypeParams(ty.typeParams),
@@ -268,7 +273,7 @@ export function mapFactsToGraph(
           },
         });
         edge(moduleNodeId, eId, 'DEFINES', 1.0, 'move-module-defines-enum');
-        for (const variant of ty.variants ?? []) {
+        for (const variant of arr(ty.variants)) {
           const vId = moveEnumVariantNodeId(tyQualified, variant.name, tyFile);
           nodes.push({
             id: vId,
@@ -281,7 +286,7 @@ export function mapFactsToGraph(
               parentEnum: tyQualified,
               moduleQualifiedName: moduleQualified,
               variantKind: variant.kind,
-              fields: variant.fields.map((f) => ({
+              fields: arr(variant.fields).map((f) => ({
                 name: f.name,
                 type: f.type,
                 positional: f.positional,
@@ -296,7 +301,7 @@ export function mapFactsToGraph(
     }
 
     // Constants
-    for (const c of mod.constants) {
+    for (const c of arr(mod.constants)) {
       const cQualified = `${moduleQualified}::${c.name}`;
       const cNodeId = moveConstNodeId(cQualified, file);
       nodes.push({

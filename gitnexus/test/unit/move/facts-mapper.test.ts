@@ -145,6 +145,37 @@ describe('mapFactsToGraph', () => {
     expect(fn?.properties.startLine).toBe(34);
   });
 
+  it('tolerates functions/modules with missing optional arrays (real move-flow shape)', () => {
+    // move-flow omits optional array fields (acquiresInferred, resourceAccess,
+    // params, typeParams, attributes, friends, types, constants) for some symbols.
+    // The mapper must not throw "not iterable" and skip the whole package.
+    const sparse = {
+      '0xb::sparse': {
+        file: '/pkg/sources/sparse.move',
+        // no friends / attributes / types / constants
+        hasSpecs: false,
+        functions: [
+          {
+            name: 'do_thing',
+            visibility: 'public',
+            isEntry: true,
+            isInline: false,
+            isNative: false,
+            isView: false,
+            hasSpec: false,
+            // acquiresInferred, resourceAccess, params, typeParams, attributes all absent
+          },
+        ],
+      },
+    } as unknown as MoveFactsMap;
+    expect(() => mapFactsToGraph(sparse, '/pkg')).not.toThrow();
+    const { nodes } = mapFactsToGraph(sparse, '/pkg');
+    const fn = nodes.find((n) => n.properties.name === 'do_thing');
+    expect(fn?.properties.isEntry).toBe(true);
+    expect(fn?.properties.parameterCount).toBe(0);
+    expect(fn?.properties.acquires).toEqual([]);
+  });
+
   it('emits Module/Function/Struct/Const nodes and DEFINES edges', () => {
     const { nodes, edges, functionNodeMap, structNodeMap, moduleFileMap } = mapFactsToGraph(
       facts,
