@@ -1,0 +1,352 @@
+/**
+ * Thin facts → graph mapper.
+ *
+ * Consumes the move-flow `facts` query response (the compiler's full-fidelity,
+ * per-module structured facts) and produces standard GraphNode / GraphRelationship
+ * objects. This is the heart of the compiler-first Move ingestion: there is
+ * **no raw-source scanning** — every fact (visibility, entry/view, attributes,
+ * acquires, resource reads/writes, enum variants, friends, locations) comes
+ * straight from move-flow.
+ */
+
+import { randomUUID } from 'node:crypto';
+import type { GraphNode, GraphRelationship, NodeLabel, RelationshipType } from 'gitnexus-shared';
+import type {
+  MoveFactsMap,
+  MoveFactsFunction,
+  MoveFactsType,
+  MoveFactsTypeParam,
+} from './compiler-facts.js';
+import {
+  moveModuleNodeId,
+  moveFunctionNodeId,
+  moveStructNodeId,
+  moveConstNodeId,
+  moveEnumVariantNodeId,
+  parseMoveModuleQualifiedName,
+} from './symbol-id.js';
+
+export interface MoveFactsMapResult {
+  nodes: GraphNode[];
+  edges: GraphRelationship[];
+  /** Module qualified name → source file path. */
+  moduleFileMap: Map<string, string>;
+  /** Function qualified name → graph node ID. */
+  functionNodeMap: Map<string, string>;
+  /** Struct/enum qualified name → graph node ID. */
+  structNodeMap: Map<string, string>;
+}
+
+function enumNodeId(enumQualifiedName: string, filePath: string): string {
+  return `Enum:${filePath}:${enumQualifiedName}`;
+}
+
+/** Strip generic type arguments: `CoinStore<CoinType>` → `CoinStore`. */
+function stripTypeArgs(typeName: string): string {
+  const idx = typeName.indexOf('<');
+  return (idx === -1 ? typeName : typeName.slice(0, idx)).trim();
+}
+
+function mapTypeParams(
+  typeParams: MoveFactsTypeParam[],
+): Array<{ name: string; constraints?: string[]; isPhantom?: boolean }> {
+  return typeParams.map((tp) => ({
+    name: tp.name,
+    constraints: tp.abilities,
+    isPhantom: tp.isPhantom,
+  }));
+}
+
+function attributeNames(attributes: { name: string }[]): string[] {
+  return attributes.map((a) => a.name);
+}
+
+/** Make an absolute path repo-relative so node IDs and File-node links align. */
+function relativize(absPath: string, repoPath?: string): string {
+  if (!repoPath) return absPath;
+  if (absPath.startsWith(repoPath)) {
+    const rel = absPath.slice(repoPath.length);
+    return rel.startsWith('/') ? rel.slice(1) : rel;
+  }
+  return absPath;
+}
+
+/**
+ * Map a full `facts` response (covering every module in a package) to graph
+ * nodes + edges. `packageRoot` is used only as a location fallback when the
+ * compiler omits a per-symbol file (it never does today, but the field is
+ * optional in the schema). When `repoPath` is given, absolute file paths from
+ * the compiler are made repo-relative so node IDs align with `File:` nodes.
+ */
+export function mapFactsToGraph(
+  facts: MoveFactsMap,
+  packageRoot: string,
+  repoPath?: string,
+): MoveFactsMapResult {
+  const nodes: GraphNode[] = [];
+  const edges: GraphRelationship[] = [];
+  const moduleFileMap = new Map<string, string>();
+  const functionNodeMap = new Map<string, string>();
+  const structNodeMap = new Map<string, string>();
+
+  const edge = (
+    sourceId: string,
+    targetId: string,
+    type: RelationshipType,
+    confidence: number,
+    reason: string,
+  ): void => {
+    edges.push({ id: `rel:${randomUUID()}`, sourceId, targetId, type, confidence, reason });
+  };
+
+  // Deferred work that needs the full struct/module index (pass B).
+  const pendingResource: Array<{
+    fnNodeId: string;
+    moduleQualified: string;
+    type: RelationshipType;
+    target: string;
+    qualified: boolean;
+  }> = [];
+  const pendingFriends: Array<{ moduleNodeId: string; friend: string }> = [];
+
+  // ── Pass A: nodes (modules, functions, types, constants) ─────────────────
+  for (const [moduleQualified, mod] of Object.entries(facts)) {
+    const moduleFileAbs = mod.file ?? packageRoot;
+    const file = relativize(moduleFileAbs, repoPath);
+    const { address, moduleName } = parseMoveModuleQualifiedName(moduleQualified);
+    moduleFileMap.set(moduleQualified, file);
+
+    const moduleNodeId = moveModuleNodeId(moduleQualified, file);
+    nodes.push({
+      id: moduleNodeId,
+      label: 'Module',
+      properties: {
+        name: moduleName,
+        filePath: file,
+        language: 'move',
+        qualifiedName: moduleQualified,
+        moduleQualifiedName: moduleQualified,
+        moduleAddress: address,
+        startLine: mod.span?.[0],
+        endLine: mod.span?.[1],
+        hasSpec: mod.hasSpecs,
+        attributes: attributeNames(mod.attributes),
+        locationFidelity: mod.file ? 'precise' : 'package',
+      },
+    });
+
+    for (const friend of mod.friends) {
+      pendingFriends.push({ moduleNodeId, friend: friend.module });
+    }
+
+    // Functions
+    for (const fn of mod.functions) {
+      const fnQualified = `${moduleQualified}::${fn.name}`;
+      const fnFile = relativize(fn.file ?? moduleFileAbs, repoPath);
+      const fnNodeId = moveFunctionNodeId(fnQualified, fnFile);
+      functionNodeMap.set(fnQualified, fnNodeId);
+      const attrs = attributeNames(fn.attributes);
+      nodes.push({
+        id: fnNodeId,
+        label: 'Function',
+        properties: {
+          name: fn.name,
+          filePath: fnFile,
+          language: 'move',
+          qualifiedName: fnQualified,
+          moduleQualifiedName: moduleQualified,
+          moduleAddress: address,
+          startLine: fn.span?.[0],
+          endLine: fn.span?.[1],
+          visibility: fn.visibility,
+          visibilityModifier: fn.visibility,
+          isEntry: fn.isEntry,
+          isView: fn.isView,
+          isInline: fn.isInline,
+          isNative: fn.isNative,
+          isInitModule: fn.name === 'init_module',
+          isTest: attrs.includes('test'),
+          isTestOnly: attrs.includes('test_only'),
+          hasSpec: fn.hasSpec,
+          attributes: attrs,
+          typeParams: mapTypeParams(fn.typeParams),
+          acquires: fn.acquiresInferred,
+          returnType: fn.returnType ?? undefined,
+          parameterCount: fn.params.length,
+          locationFidelity: fn.file ? 'precise' : 'package',
+        },
+      });
+      edge(moduleNodeId, fnNodeId, 'DEFINES', 1.0, 'move-module-defines-function');
+
+      for (const r of fn.resourceAccess.reads) {
+        pendingResource.push({
+          fnNodeId,
+          moduleQualified,
+          type: 'READS_RESOURCE',
+          target: stripTypeArgs(r),
+          qualified: false,
+        });
+      }
+      for (const w of fn.resourceAccess.writes) {
+        pendingResource.push({
+          fnNodeId,
+          moduleQualified,
+          type: 'WRITES_RESOURCE',
+          target: stripTypeArgs(w),
+          qualified: false,
+        });
+      }
+      for (const a of fn.acquiresInferred) {
+        pendingResource.push({
+          fnNodeId,
+          moduleQualified,
+          type: 'ACQUIRES',
+          target: a,
+          qualified: true,
+        });
+      }
+    }
+
+    // Types (structs + enums)
+    for (const ty of mod.types) {
+      const tyQualified = `${moduleQualified}::${ty.name}`;
+      const tyFile = relativize(ty.file ?? moduleFileAbs, repoPath);
+      const attrs = attributeNames(ty.attributes);
+      if (ty.kind === 'struct') {
+        const structNodeId = moveStructNodeId(tyQualified, tyFile);
+        structNodeMap.set(tyQualified, structNodeId);
+        nodes.push({
+          id: structNodeId,
+          label: 'Struct',
+          properties: {
+            name: ty.name,
+            filePath: tyFile,
+            language: 'move',
+            qualifiedName: tyQualified,
+            moduleQualifiedName: moduleQualified,
+            moduleAddress: address,
+            startLine: ty.span?.[0],
+            endLine: ty.span?.[1],
+            abilities: ty.abilities,
+            isResource: ty.abilities.includes('key'),
+            isEvent: attrs.includes('event'),
+            hasSpec: ty.hasSpec,
+            attributes: attrs,
+            typeParams: mapTypeParams(ty.typeParams),
+            fields: (ty.fields ?? []).map((f) => ({
+              name: f.name,
+              type: f.type,
+              positional: f.positional,
+            })),
+            moveDeclarationKind: 'struct',
+            locationFidelity: ty.file ? 'precise' : 'package',
+          },
+        });
+        edge(moduleNodeId, structNodeId, 'DEFINES', 1.0, 'move-module-defines-struct');
+      } else {
+        const eId = enumNodeId(tyQualified, tyFile);
+        structNodeMap.set(tyQualified, eId);
+        nodes.push({
+          id: eId,
+          label: 'Enum',
+          properties: {
+            name: ty.name,
+            filePath: tyFile,
+            language: 'move',
+            qualifiedName: tyQualified,
+            moduleQualifiedName: moduleQualified,
+            moduleAddress: address,
+            startLine: ty.span?.[0],
+            endLine: ty.span?.[1],
+            abilities: ty.abilities,
+            hasSpec: ty.hasSpec,
+            attributes: attrs,
+            typeParams: mapTypeParams(ty.typeParams),
+            moveDeclarationKind: 'enum',
+            locationFidelity: ty.file ? 'precise' : 'package',
+          },
+        });
+        edge(moduleNodeId, eId, 'DEFINES', 1.0, 'move-module-defines-enum');
+        for (const variant of ty.variants ?? []) {
+          const vId = moveEnumVariantNodeId(tyQualified, variant.name, tyFile);
+          nodes.push({
+            id: vId,
+            label: 'EnumVariant',
+            properties: {
+              name: variant.name,
+              filePath: tyFile,
+              language: 'move',
+              qualifiedName: `${tyQualified}::${variant.name}`,
+              moduleQualifiedName: moduleQualified,
+              variantKind: variant.kind,
+              fields: variant.fields.map((f) => ({
+                name: f.name,
+                type: f.type,
+                positional: f.positional,
+              })),
+              attributes: attributeNames(variant.attributes),
+              locationFidelity: ty.file ? 'precise' : 'package',
+            },
+          });
+          edge(eId, vId, 'CONTAINS', 1.0, 'move-enum-contains-variant');
+        }
+      }
+    }
+
+    // Constants
+    for (const c of mod.constants) {
+      const cQualified = `${moduleQualified}::${c.name}`;
+      const cNodeId = moveConstNodeId(cQualified, file);
+      nodes.push({
+        id: cNodeId,
+        label: 'Const',
+        properties: {
+          name: c.name,
+          filePath: file,
+          language: 'move',
+          qualifiedName: cQualified,
+          moduleQualifiedName: moduleQualified,
+          declaredType: c.type,
+          value: c.value,
+          locationFidelity: mod.file ? 'precise' : 'package',
+        },
+      });
+      edge(moduleNodeId, cNodeId, 'DEFINES', 1.0, 'move-module-defines-const');
+    }
+  }
+
+  // ── Pass B: resolve resource + friend edges against the full index ───────
+  const resolveStruct = (localOrQualified: string, callerModule: string): string | undefined => {
+    // Fully-qualified hit (e.g. acquiresInferred values).
+    const exact = structNodeMap.get(localOrQualified);
+    if (exact) return exact;
+    const base = stripTypeArgs(localOrQualified);
+    // Same-module preference.
+    const sameModule = structNodeMap.get(`${callerModule}::${base}`);
+    if (sameModule) return sameModule;
+    // Unique suffix match across the package.
+    const matches: string[] = [];
+    for (const [qn, id] of structNodeMap) {
+      if (qn === base || qn.endsWith(`::${base}`)) matches.push(id);
+    }
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+
+  for (const pr of pendingResource) {
+    const targetId = resolveStruct(pr.target, pr.moduleQualified);
+    if (!targetId) continue; // resource in a dependency / unresolved — skip dangling edge
+    edge(pr.fnNodeId, targetId, pr.type, 1.0, `move-${pr.type.toLowerCase()}`);
+  }
+
+  for (const pf of pendingFriends) {
+    const friendFile = moduleFileMap.get(pf.friend);
+    if (!friendFile) continue; // cross-package friend — target node not in this graph slice
+    const friendNodeId = moveModuleNodeId(pf.friend, friendFile);
+    edge(pf.moduleNodeId, friendNodeId, 'FRIEND_OF', 1.0, 'move-friend-declaration');
+  }
+
+  return { nodes, edges, moduleFileMap, functionNodeMap, structNodeMap };
+}
+
+// Re-export for callers that prefer the label type.
+export type { NodeLabel };
