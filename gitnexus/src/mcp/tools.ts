@@ -582,4 +582,67 @@ WHEN TO USE: After changing group.yaml or re-indexing member repos.`,
       required: ['name'],
     },
   },
+  {
+    name: 'move_entries',
+    description: `List Move/Aptos entry points (compiler-sourced).
+
+WHEN TO USE: To enumerate a Move package's external surface — \`entry\` functions (transaction entry points), \`#[view]\` functions (read-only queries), and \`init_module\` lifecycle hooks. Filter by module, kind, attribute, or spec presence.
+
+Returns: { entries: [{ name, qualifiedName, filePath, isEntry, isView, isInitModule, visibility, hasSpec, acquires, attributes, returnType }], count }.`,
+    annotations: READ_ONLY_TOOL_ANNOTATIONS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        module: { type: 'string', description: 'Filter to one module (qualified name, e.g. 0xa::coin).' },
+        kind: {
+          type: 'string',
+          enum: ['entry', 'view', 'init_module', 'inline', 'native'],
+          description: 'Restrict to a single entry kind. Omit for entry+view+init_module.',
+        },
+        attribute: { type: 'string', description: 'Only functions carrying this attribute (e.g. "view", "test").' },
+        hasSpec: { type: 'boolean', description: 'Only functions with a Move spec block.' },
+        includeTestOnly: { type: 'boolean', description: 'Include #[test_only] functions (default false).' },
+        repo: { type: 'string', description: 'Repository name or path.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'move_resources',
+    description: `List Move/Aptos resources (structs with the \`key\` ability) and their accessors.
+
+WHEN TO USE: To audit on-chain storage — which resources exist and which functions read/write/acquire them (from READS_RESOURCE / WRITES_RESOURCE / ACQUIRES edges).
+
+Returns: { resources: [{ name, qualifiedName, filePath, abilities, fieldList, accessors: [{ caller, reason, isEntry, isView }] }], count }.`,
+    annotations: READ_ONLY_TOOL_ANNOTATIONS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        module: { type: 'string', description: 'Filter to one module (qualified name).' },
+        repo: { type: 'string', description: 'Repository name or path.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'move_impact',
+    description: `Blast radius for a Move/Aptos symbol over Move edges (CALLS / READS_RESOURCE / WRITES_RESOURCE / ACQUIRES).
+
+WHEN TO USE: BEFORE editing a Move function or resource. Reports callers and resource-access dependents. Restricts the generic impact traversal to Move semantic edges.`,
+    annotations: READ_ONLY_TOOL_ANNOTATIONS,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Move symbol (qualified name preferred, e.g. 0xa::coin::transfer).' },
+        direction: {
+          type: 'string',
+          enum: ['upstream', 'downstream'],
+          description: 'upstream = who depends on the target (default); downstream = what the target depends on.',
+        },
+        maxDepth: { type: 'number', description: 'Traversal depth (default 3).' },
+        repo: { type: 'string', description: 'Repository name or path.' },
+      },
+      required: ['target'],
+    },
+  },
 ];

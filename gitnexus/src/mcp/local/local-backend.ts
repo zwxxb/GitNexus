@@ -1001,6 +1001,13 @@ export class LocalBackend {
         return this.toolMap(repo, params);
       case 'api_impact':
         return this.apiImpact(repo, params);
+      // Move/Aptos tools (graph-property/Cypher only — no move-flow shell-out).
+      case 'move_entries':
+        return this.moveEntries(repo, params);
+      case 'move_resources':
+        return this.moveResources(repo, params);
+      case 'move_impact':
+        return this.moveImpact(repo, params);
       default:
         throw new Error(`Unknown tool: ${method}`);
     }
@@ -2866,6 +2873,117 @@ export class LocalBackend {
     };
   }
 
+  // ─── Move/Aptos tools ────────────────────────────────────────────
+  // All three read graph node properties / edges only — no move-flow shell-out.
+
+  private async moveEntries(
+    repo: RepoHandle,
+    params: {
+      module?: string;
+      kind?: 'entry' | 'view' | 'init_module' | 'inline' | 'native';
+      attribute?: string;
+      hasSpec?: boolean;
+      includeTestOnly?: boolean;
+    },
+  ): Promise<any> {
+    await this.ensureInitialized(repo);
+    if (!isLbugReady(repo.lbugPath)) {
+      return { error: 'LadybugDB not ready. Index may be corrupted.' };
+    }
+    const clauses: string[] = ["f.language = 'move'"];
+    switch (params?.kind) {
+      case 'entry':
+        clauses.push('f.isEntry = true');
+        break;
+      case 'view':
+        clauses.push('f.isView = true');
+        break;
+      case 'init_module':
+        clauses.push('f.isInitModule = true');
+        break;
+      case 'inline':
+        clauses.push('f.isInline = true');
+        break;
+      case 'native':
+        clauses.push('f.isNative = true');
+        break;
+      default:
+        clauses.push('(f.isEntry = true OR f.isView = true OR f.isInitModule = true)');
+    }
+    if (params?.includeTestOnly !== true) {
+      clauses.push('(f.isTestOnly IS NULL OR f.isTestOnly = false)');
+    }
+    if (params?.hasSpec === true) clauses.push('f.hasSpec = true');
+    const qp: Record<string, unknown> = {};
+    if (typeof params?.module === 'string' && params.module) {
+      clauses.push('f.moduleQualifiedName = $module');
+      qp.module = params.module;
+    }
+    const query =
+      `MATCH (f:Function) WHERE ${clauses.join(' AND ')} ` +
+      `RETURN f.name AS name, f.qualifiedName AS qualifiedName, f.filePath AS filePath, ` +
+      `f.isEntry AS isEntry, f.isView AS isView, f.isInitModule AS isInitModule, ` +
+      `f.isInline AS isInline, f.isNative AS isNative, f.visibility AS visibility, ` +
+      `f.hasSpec AS hasSpec, f.acquires AS acquires, f.attributes AS attributes, ` +
+      `f.returnType AS returnType ORDER BY f.filePath, f.name`;
+    const rows = await executeParameterized(repo.lbugPath, query, qp);
+    if (!Array.isArray(rows)) return rows;
+    const attribute = params?.attribute;
+    const filtered =
+      typeof attribute === 'string' && attribute
+        ? rows.filter((r: any) => Array.isArray(r.attributes) && r.attributes.includes(attribute))
+        : rows;
+    return { entries: filtered, count: filtered.length };
+  }
+
+  private async moveResources(
+    repo: RepoHandle,
+    params: { module?: string },
+  ): Promise<any> {
+    await this.ensureInitialized(repo);
+    if (!isLbugReady(repo.lbugPath)) {
+      return { error: 'LadybugDB not ready. Index may be corrupted.' };
+    }
+    const qp: Record<string, unknown> = {};
+    let moduleFilter = '';
+    if (typeof params?.module === 'string' && params.module) {
+      moduleFilter = ' AND s.moduleQualifiedName = $module';
+      qp.module = params.module;
+    }
+    const query =
+      "MATCH (s:Struct) WHERE s.language = 'move' AND s.isResource = true" +
+      moduleFilter +
+      ' OPTIONAL MATCH (f:Function)-[r:CodeRelation]->(s) ' +
+      "WHERE r.type = 'READS_RESOURCE' OR r.type = 'WRITES_RESOURCE' OR r.type = 'ACQUIRES' " +
+      'RETURN s.name AS name, s.qualifiedName AS qualifiedName, s.filePath AS filePath, ' +
+      's.abilities AS abilities, s.fieldList AS fieldList, ' +
+      'collect({ caller: f.qualifiedName, reason: r.type, isEntry: f.isEntry, isView: f.isView }) AS accessors ' +
+      'ORDER BY s.qualifiedName';
+    const rows = await executeParameterized(repo.lbugPath, query, qp);
+    if (!Array.isArray(rows)) return rows;
+    // Drop the null accessor produced by OPTIONAL MATCH when a resource has none.
+    const resources = rows.map((r: any) => ({
+      ...r,
+      accessors: Array.isArray(r.accessors)
+        ? r.accessors.filter((a: any) => a && a.caller)
+        : [],
+    }));
+    return { resources, count: resources.length };
+  }
+
+  private async moveImpact(
+    repo: RepoHandle,
+    params: { target: string; direction?: 'upstream' | 'downstream'; maxDepth?: number },
+  ): Promise<any> {
+    // Reuse the generic, well-tested impact BFS, restricted to Move edges.
+    return this.impact(repo, {
+      target: params.target,
+      direction: params.direction ?? 'upstream',
+      maxDepth: params.maxDepth,
+      relationTypes: ['CALLS', 'READS_RESOURCE', 'WRITES_RESOURCE', 'ACQUIRES'],
+    } as ImpactParams);
+  }
+
   private async impact(repo: RepoHandle, params: ImpactParams): Promise<any> {
     try {
       return await this._impactImpl(repo, params);
@@ -2905,6 +3023,10 @@ export class LocalBackend {
             'METHOD_OVERRIDES',
             'OVERRIDES',
             'METHOD_IMPLEMENTS',
+            // Move/Aptos resource & acquires edges (no-op for non-Move graphs).
+            'ACQUIRES',
+            'READS_RESOURCE',
+            'WRITES_RESOURCE',
           ];
     const relationTypes =
       rawRelTypes.length > 0
@@ -2918,6 +3040,10 @@ export class LocalBackend {
             'METHOD_OVERRIDES',
             'OVERRIDES',
             'METHOD_IMPLEMENTS',
+            // Move/Aptos resource & acquires edges (no-op for non-Move graphs).
+            'ACQUIRES',
+            'READS_RESOURCE',
+            'WRITES_RESOURCE',
           ];
     const includeTests = params.includeTests ?? false;
     const minConfidence = params.minConfidence ?? 0;
