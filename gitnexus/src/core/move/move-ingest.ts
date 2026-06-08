@@ -56,37 +56,6 @@ import { createMoveEntryPointEdges } from './entry-points.js';
 
 const ERROR_CODE_PATTERN = /^E[_A-Z]/;
 
-/**
- * Run `mapper` over `inputs` with at most `limit` concurrent in-flight calls,
- * collecting allSettled-style results in input order. Bounds move-flow MCP
- * fan-out (a single stdio child).
- */
-export async function mapWithConcurrency<T, R>(
-  inputs: readonly T[],
-  limit: number,
-  mapper: (input: T, index: number) => Promise<R>,
-): Promise<PromiseSettledResult<R>[]> {
-  const cap = Math.max(1, Math.floor(limit));
-  const results: PromiseSettledResult<R>[] = new Array(inputs.length);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (true) {
-      const i = next++;
-      if (i >= inputs.length) return;
-      try {
-        results[i] = { status: 'fulfilled', value: await mapper(inputs[i], i) };
-      } catch (reason) {
-        results[i] = { status: 'rejected', reason };
-      }
-    }
-  }
-  const workers: Promise<void>[] = [];
-  const n = Math.min(cap, inputs.length);
-  for (let w = 0; w < n; w++) workers.push(worker());
-  await Promise.all(workers);
-  return results;
-}
-
 // ── Phase output ───────────────────────────────────────────────────────────
 
 export interface MoveIngestOutput {
@@ -199,26 +168,14 @@ export function createMoveIngestPhase(
             stats: { filesProcessed: 0, totalFiles, nodesCreated: ctx.graph.nodeCount },
           });
 
-          // compilerFacts (understand/ports projections) come from the canonical
-          // module_summary in both modes — reliable and source-free.
-          const manifest = (await client
-            .manifest(pkgRoot)
-            .catch(() => ({ source_paths: [], dep_paths: [] }))) as MoveFlowManifest;
-          const summary = (await client.moduleSummary(pkgRoot)) as ModuleSummaryMap;
+          // Call graph drives CALLS edges in both modes.
           const callGraphData = (await client.callGraph(pkgRoot).catch(() => ({}))) as CallGraphMap;
           callGraphByPackage.set(pkgRoot, callGraphData);
           deferredCallGraphs.push(callGraphData);
-          compilerFacts = mergeMovePackageFacts(
-            compilerFacts,
-            buildMovePackageFacts({
-              packageRoot: pkgRoot,
-              manifest,
-              moduleSummary: summary,
-              callGraph: callGraphData,
-            }),
-          );
 
           if (useFacts) {
+            // Primary path: the rich `facts` query is the *only* move-flow call
+            // on the critical path — no module_summary, no signature re-parsing.
             const facts = await client.facts(pkgRoot);
             const mapped = mapFactsToGraph(facts, pkgRoot, ctx.repoPath);
             for (const node of mapped.nodes) ctx.graph.addNode(node);
@@ -234,7 +191,21 @@ export function createMoveIngestPhase(
             }
             for (const [qn, id] of mapped.structNodeMap) structNodeMap.set(qn, id);
           } else {
-            // Degraded path: module_summary + normalized signature only.
+            // Degraded path: module_summary + normalized signature only (no
+            // attributes/acquires/friends/enum-variants, package-root locations).
+            const manifest = (await client
+              .manifest(pkgRoot)
+              .catch(() => ({ source_paths: [], dep_paths: [] }))) as MoveFlowManifest;
+            const summary = (await client.moduleSummary(pkgRoot)) as ModuleSummaryMap;
+            compilerFacts = mergeMovePackageFacts(
+              compilerFacts,
+              buildMovePackageFacts({
+                packageRoot: pkgRoot,
+                manifest,
+                moduleSummary: summary,
+                callGraph: callGraphData,
+              }),
+            );
             ingestFromModuleSummary(ctx, summary, pkgRoot, pkgRel, {
               moduleFileMap,
               functionNodeMap,

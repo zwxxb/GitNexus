@@ -454,6 +454,12 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Macro\` TO Method,
   FROM \`Module\` TO Function,
   FROM \`Module\` TO Method,
+  // Move/Aptos: module defines structs/enums/consts; enums contain variants.
+  FROM \`Module\` TO \`Struct\`,
+  FROM \`Module\` TO \`Enum\`,
+  FROM \`Module\` TO \`Const\`,
+  FROM \`Enum\` TO \`EnumVariant\`,
+  FROM \`Module\` TO \`EnumVariant\`,
   FROM \`Typedef\` TO Community,
   FROM \`Union\` TO Community,
   FROM \`Namespace\` TO Community,

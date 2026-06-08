@@ -5,7 +5,7 @@
  * scanning). This barrel exposes only the thin-consumer API.
  */
 
-export { createMoveIngestPhase, mapWithConcurrency } from './move-ingest.js';
+export { createMoveIngestPhase } from './move-ingest.js';
 export type { MoveIngestOutput } from './move-ingest.js';
 
 export {

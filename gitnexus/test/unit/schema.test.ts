@@ -228,4 +228,28 @@ describe('LadybugDB Schema', () => {
       expect(relIndex).toBeGreaterThan(lastNodeIndex);
     });
   });
+
+  // Lockstep guard: every FROM/TO node-label pair the Move facts→graph mapper
+  // can emit MUST be declared in RELATION_SCHEMA, or lbug silently drops the
+  // edge at COPY (and the per-row fallback). Regression guard for the
+  // Module→Struct/Enum/Const DEFINES + Enum→EnumVariant CONTAINS loss.
+  describe('Move relationship pairs are declared (rel-table lockstep)', () => {
+    const requiredPairs: [string, string][] = [
+      ['Module', 'Function'], // DEFINES
+      ['Module', 'Struct'], // DEFINES
+      ['Module', 'Enum'], // DEFINES
+      ['Module', 'Const'], // DEFINES
+      ['Enum', 'EnumVariant'], // CONTAINS
+      ['Function', 'Struct'], // READS_RESOURCE / WRITES_RESOURCE / ACQUIRES
+      ['Function', 'Module'], // ENTRY_POINT_OF
+      ['Module', 'Module'], // FRIEND_OF
+      ['File', 'Module'], // CONTAINS
+    ];
+    for (const [from, to] of requiredPairs) {
+      it(`declares FROM ${from} TO ${to}`, () => {
+        const pattern = new RegExp(`FROM \`?${from}\`?\\s+TO \`?${to}\`?`);
+        expect(RELATION_SCHEMA).toMatch(pattern);
+      });
+    }
+  });
 });

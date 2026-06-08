@@ -499,25 +499,29 @@ export async function runFullAnalysis(
   const moveFlowClient = tryCreateMoveFlowClient();
 
   // ── Phase 1: Full Pipeline (0–60%) ────────────────────────────────
-  const pipelineResult = await runPipelineFromRepo(
-    repoPath,
-    (p) => {
-      const phaseLabel = PHASE_LABELS[p.phase] || p.phase;
-      const scaled = Math.round(p.percent * 0.6);
-      const message = p.detail
-        ? `${p.message || phaseLabel} (${p.detail})`
-        : p.message || phaseLabel;
-      progress(p.phase, scaled, message);
-    },
-    {
-      parseCache,
-      workerPoolSize: options.workerPoolSize,
-      moveFlowClient,
-    },
-  );
-
-  // Release the move-flow child process once ingestion has consumed it.
-  await moveFlowClient?.shutdown();
+  // `finally` guarantees the spawned move-flow child is released even if the
+  // pipeline throws — important for long-running hosts (MCP daemon, eval-server).
+  let pipelineResult: Awaited<ReturnType<typeof runPipelineFromRepo>>;
+  try {
+    pipelineResult = await runPipelineFromRepo(
+      repoPath,
+      (p) => {
+        const phaseLabel = PHASE_LABELS[p.phase] || p.phase;
+        const scaled = Math.round(p.percent * 0.6);
+        const message = p.detail
+          ? `${p.message || phaseLabel} (${p.detail})`
+          : p.message || phaseLabel;
+        progress(p.phase, scaled, message);
+      },
+      {
+        parseCache,
+        workerPoolSize: options.workerPoolSize,
+        moveFlowClient,
+      },
+    );
+  } finally {
+    await moveFlowClient?.shutdown();
+  }
 
   // ── Phase 2: LadybugDB (60–85%) ──────────────────────────────────
   progress('lbug', 60, 'Loading into LadybugDB...');

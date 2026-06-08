@@ -11,12 +11,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { GraphNode, GraphRelationship, NodeLabel, RelationshipType } from 'gitnexus-shared';
-import type {
-  MoveFactsMap,
-  MoveFactsFunction,
-  MoveFactsType,
-  MoveFactsTypeParam,
-} from './compiler-facts.js';
+import type { MoveFactsMap, MoveFactsTypeParam } from './compiler-facts.js';
 import {
   moveModuleNodeId,
   moveFunctionNodeId,
@@ -36,6 +31,9 @@ export interface MoveFactsMapResult {
   /** Struct/enum qualified name → graph node ID. */
   structNodeMap: Map<string, string>;
 }
+
+/** Error-code constant naming convention (e.g. `E_NOT_REGISTERED`). */
+const ERROR_CODE_PATTERN = /^E[_A-Z]/;
 
 function enumNodeId(enumQualifiedName: string, filePath: string): string {
   return `Enum:${filePath}:${enumQualifiedName}`;
@@ -230,6 +228,7 @@ export function mapFactsToGraph(
             abilities: ty.abilities,
             isResource: ty.abilities.includes('key'),
             isEvent: attrs.includes('event'),
+            isTestOnly: attrs.includes('test_only'),
             hasSpec: ty.hasSpec,
             attributes: attrs,
             typeParams: mapTypeParams(ty.typeParams),
@@ -311,6 +310,7 @@ export function mapFactsToGraph(
           moduleQualifiedName: moduleQualified,
           declaredType: c.type,
           value: c.value,
+          isErrorCode: ERROR_CODE_PATTERN.test(c.name),
           locationFidelity: mod.file ? 'precise' : 'package',
         },
       });
@@ -335,9 +335,15 @@ export function mapFactsToGraph(
     return matches.length === 1 ? matches[0] : undefined;
   };
 
+  const seenResourceEdges = new Set<string>();
   for (const pr of pendingResource) {
     const targetId = resolveStruct(pr.target, pr.moduleQualified);
     if (!targetId) continue; // resource in a dependency / unresolved — skip dangling edge
+    // Dedupe: `CoinStore<A>` and `CoinStore<B>` (or read+acquire of one struct)
+    // collapse to the same edge.
+    const key = `${pr.fnNodeId}\0${pr.type}\0${targetId}`;
+    if (seenResourceEdges.has(key)) continue;
+    seenResourceEdges.add(key);
     edge(pr.fnNodeId, targetId, pr.type, 1.0, `move-${pr.type.toLowerCase()}`);
   }
 
