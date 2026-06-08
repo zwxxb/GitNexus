@@ -40,6 +40,8 @@ import {
   type CommunitiesOutput,
   type ProcessesOutput,
 } from './pipeline-phases/index.js';
+import { createMoveIngestPhase } from '../move/move-ingest.js';
+import type { MoveFlowClient } from '../move/mcp-client.js';
 
 export interface PipelineOptions {
   /**
@@ -128,6 +130,13 @@ export interface PipelineOptions {
    * `process.env` state across invocations. When undefined, the env var decides.
    */
   keepLocalValueSymbols?: boolean;
+  /**
+   * move-flow MCP client for compiler-first Move/Aptos ingestion. When set, the
+   * `moveIngest` phase uses it to ingest every Move package (Move.toml) found in
+   * the repo. When `null`/undefined, `moveIngest` is a no-op (non-Move repos).
+   * `run-analyze.ts` creates this lazily only when the repo contains `.move`.
+   */
+  moveFlowClient?: MoveFlowClient | null;
 }
 
 // ── Phase registry ─────────────────────────────────────────────────────────
@@ -148,6 +157,8 @@ function buildPhaseList(options?: PipelineOptions): PipelinePhase[] {
   const phases: PipelinePhase[] = [
     scanPhase,
     structurePhase,
+    // Compiler-first Move ingestion (no-op when no move-flow client / no Move pkgs).
+    createMoveIngestPhase(options?.moveFlowClient ?? null),
     markdownPhase,
     cobolPhase,
     parsePhase,
