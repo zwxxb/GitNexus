@@ -441,6 +441,7 @@ function ingestFromModuleSummary(
           isExported: true,
           abilities: struct.abilities,
           isResource: struct.abilities.includes('key'),
+          fieldList: struct.fields,
           qualifiedName: structQualified,
           moduleQualifiedName: qualifiedName,
           locationFidelity: 'package',

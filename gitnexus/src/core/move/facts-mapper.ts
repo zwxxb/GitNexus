@@ -238,6 +238,8 @@ export function mapFactsToGraph(
               type: f.type,
               positional: f.positional,
             })),
+            // STRING[] projection persisted to lbug (`fieldList` column).
+            fieldList: (ty.fields ?? []).map((f) => `${f.name}: ${f.type}`),
             moveDeclarationKind: 'struct',
             locationFidelity: ty.file ? 'precise' : 'package',
           },
@@ -277,6 +279,7 @@ export function mapFactsToGraph(
               filePath: tyFile,
               language: 'move',
               qualifiedName: `${tyQualified}::${variant.name}`,
+              parentEnum: tyQualified,
               moduleQualifiedName: moduleQualified,
               variantKind: variant.kind,
               fields: variant.fields.map((f) => ({

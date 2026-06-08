@@ -74,6 +74,29 @@ export const escapeCSVNumber = (
   return String(value);
 };
 
+const escapeArrayElement = (value: unknown): string => {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "''");
+};
+
+/** LadybugDB STRING[] literal inside a quoted CSV field. */
+export const escapeCSVStringArray = (value: unknown): string => {
+  const items = Array.isArray(value) ? value : [];
+  const literal = `[${items.map((item) => `"${escapeArrayElement(item).replace(/"/g, '""')}"`).join(',')}]`;
+  return escapeCSVField(literal);
+};
+
+export const escapeCSVBoolean = (value: unknown): string => {
+  return value === true ? 'true' : 'false';
+};
+
+/** JSON-encode a structured property (e.g. typeParams, fields) into a STRING column. */
+export const escapeCSVJson = (value: unknown): string => {
+  if (value === undefined || value === null) return escapeCSVField('');
+  return escapeCSVField(JSON.stringify(value));
+};
+
 // ============================================================================
 // CONTENT EXTRACTION (lazy — reads from disk on demand)
 // ============================================================================
@@ -262,10 +285,31 @@ export const streamAllCSVsToDisk = async (
   );
   const folderWriter = new BufferedCSVWriter(path.join(csvDir, 'folder.csv'), 'id,name,filePath');
   const codeElementHeader = 'id,name,filePath,startLine,endLine,isExported,content,description';
-  const functionWriter = new BufferedCSVWriter(
-    path.join(csvDir, 'function.csv'),
+  // Function carries Move compiler facts (no-op columns for non-Move functions).
+  const functionHeader = [
     codeElementHeader,
-  );
+    'language',
+    'qualifiedName',
+    'moduleQualifiedName',
+    'visibility',
+    'visibilityModifier',
+    'isEntry',
+    'isView',
+    'isInitModule',
+    'isInline',
+    'isNative',
+    'isTest',
+    'isTestOnly',
+    'hasSpec',
+    'parameterCount',
+    'returnType',
+    'acquires',
+    'usedTypes',
+    'attributes',
+    'typeParamsJson',
+    'expectedFailureJson',
+  ].join(',');
+  const functionWriter = new BufferedCSVWriter(path.join(csvDir, 'function.csv'), functionHeader);
   const classWriter = new BufferedCSVWriter(path.join(csvDir, 'class.csv'), codeElementHeader);
   const interfaceWriter = new BufferedCSVWriter(
     path.join(csvDir, 'interface.csv'),
@@ -307,9 +351,49 @@ export const streamAllCSVsToDisk = async (
 
   // Multi-language node types share the same CSV shape (no isExported column)
   const multiLangHeader = 'id,name,filePath,startLine,endLine,content,description';
+  // Move struct/enum/const/module/enum-variant carry compiler-sourced facts.
+  const moveStructLikeHeader = [
+    multiLangHeader,
+    'language',
+    'qualifiedName',
+    'moduleQualifiedName',
+    'abilities',
+    'isResource',
+    'isEvent',
+    'isTestOnly',
+    'fieldList',
+    'attributes',
+    'moveDeclarationKind',
+  ].join(',');
+  const moveConstHeader = [
+    multiLangHeader,
+    'language',
+    'qualifiedName',
+    'moduleQualifiedName',
+    'constType',
+    'constValue',
+    'isErrorCode',
+  ].join(',');
+  const moveEnumVariantHeader = [
+    multiLangHeader,
+    'language',
+    'qualifiedName',
+    'parentEnum',
+    'moduleQualifiedName',
+    'variantKind',
+    'fieldsJson',
+  ].join(',');
+  const moveModuleHeader = [
+    multiLangHeader,
+    'language',
+    'qualifiedName',
+    'moduleAddress',
+    'attributes',
+  ].join(',');
   const MULTI_LANG_TYPES = [
     'Struct',
     'Enum',
+    'EnumVariant',
     'Macro',
     'Typedef',
     'Union',
@@ -331,13 +415,19 @@ export const streamAllCSVsToDisk = async (
   const propertyHeader = 'id,name,filePath,startLine,endLine,content,description,declaredType';
   const multiLangWriters = new Map<string, BufferedCSVWriter>();
   for (const t of MULTI_LANG_TYPES) {
-    multiLangWriters.set(
-      t,
-      new BufferedCSVWriter(
-        path.join(csvDir, `${t.toLowerCase()}.csv`),
-        t === 'Property' ? propertyHeader : multiLangHeader,
-      ),
-    );
+    const header =
+      t === 'Property'
+        ? propertyHeader
+        : t === 'Struct' || t === 'Enum'
+          ? moveStructLikeHeader
+          : t === 'EnumVariant'
+            ? moveEnumVariantHeader
+            : t === 'Const'
+              ? moveConstHeader
+              : t === 'Module'
+                ? moveModuleHeader
+                : multiLangHeader;
+    multiLangWriters.set(t, new BufferedCSVWriter(path.join(csvDir, `${t.toLowerCase()}.csv`), header));
   }
 
   const codeWriterMap: Record<string, BufferedCSVWriter> = {
@@ -483,37 +573,119 @@ export const streamAllCSVsToDisk = async (
         const writer = codeWriterMap[node.label];
         if (writer) {
           const content = await extractContent(node, contentCache);
-          await writer.addRow(
-            [
-              escapeCSVField(node.id),
-              escapeCSVField(node.properties.name || ''),
-              escapeCSVField(node.properties.filePath || ''),
-              escapeCSVNumber(node.properties.startLine, -1),
-              escapeCSVNumber(node.properties.endLine, -1),
-              node.properties.isExported ? 'true' : 'false',
-              escapeCSVField(content),
-              escapeCSVField(node.properties.description || ''),
-            ].join(','),
-          );
+          const baseFields = [
+            escapeCSVField(node.id),
+            escapeCSVField(node.properties.name || ''),
+            escapeCSVField(node.properties.filePath || ''),
+            escapeCSVNumber(node.properties.startLine, -1),
+            escapeCSVNumber(node.properties.endLine, -1),
+            node.properties.isExported ? 'true' : 'false',
+            escapeCSVField(content),
+            escapeCSVField(node.properties.description || ''),
+          ];
+          if (node.label === 'Function') {
+            await writer.addRow(
+              [
+                ...baseFields,
+                escapeCSVField(node.properties.language || ''),
+                escapeCSVField(node.properties.qualifiedName || ''),
+                escapeCSVField(node.properties.moduleQualifiedName || ''),
+                escapeCSVField(node.properties.visibility || ''),
+                escapeCSVField(node.properties.visibilityModifier || ''),
+                escapeCSVBoolean(node.properties.isEntry),
+                escapeCSVBoolean(node.properties.isView),
+                escapeCSVBoolean(node.properties.isInitModule),
+                escapeCSVBoolean(node.properties.isInline),
+                escapeCSVBoolean(node.properties.isNative),
+                escapeCSVBoolean(node.properties.isTest),
+                escapeCSVBoolean(node.properties.isTestOnly),
+                escapeCSVBoolean(node.properties.hasSpec),
+                escapeCSVNumber(node.properties.parameterCount, 0),
+                escapeCSVField(node.properties.returnType || ''),
+                escapeCSVStringArray(node.properties.acquires),
+                escapeCSVStringArray(node.properties.usedTypes),
+                escapeCSVStringArray(node.properties.attributes),
+                escapeCSVJson(node.properties.typeParams),
+                escapeCSVJson(node.properties.expectedFailure),
+              ].join(','),
+            );
+          } else {
+            await writer.addRow(baseFields.join(','));
+          }
         } else {
           // Multi-language node types (Struct, Impl, Trait, Macro, etc.)
           const mlWriter = multiLangWriters.get(node.label);
           if (mlWriter) {
             const content = await extractContent(node, contentCache);
-            await mlWriter.addRow(
-              [
-                escapeCSVField(node.id),
-                escapeCSVField(node.properties.name || ''),
-                escapeCSVField(node.properties.filePath || ''),
-                escapeCSVNumber(node.properties.startLine, -1),
-                escapeCSVNumber(node.properties.endLine, -1),
-                escapeCSVField(content),
-                escapeCSVField(node.properties.description || ''),
-                ...(node.label === 'Property'
-                  ? [escapeCSVField(node.properties.declaredType || '')]
-                  : []),
-              ].join(','),
-            );
+            const baseFields = [
+              escapeCSVField(node.id),
+              escapeCSVField(node.properties.name || ''),
+              escapeCSVField(node.properties.filePath || ''),
+              escapeCSVNumber(node.properties.startLine, -1),
+              escapeCSVNumber(node.properties.endLine, -1),
+              escapeCSVField(content),
+              escapeCSVField(node.properties.description || ''),
+            ];
+            if (node.label === 'Struct' || node.label === 'Enum') {
+              await mlWriter.addRow(
+                [
+                  ...baseFields,
+                  escapeCSVField(node.properties.language || ''),
+                  escapeCSVField(node.properties.qualifiedName || ''),
+                  escapeCSVField(node.properties.moduleQualifiedName || ''),
+                  escapeCSVStringArray(node.properties.abilities),
+                  escapeCSVBoolean(node.properties.isResource),
+                  escapeCSVBoolean(node.properties.isEvent),
+                  escapeCSVBoolean(node.properties.isTestOnly),
+                  escapeCSVStringArray(node.properties.fieldList),
+                  escapeCSVStringArray(node.properties.attributes),
+                  escapeCSVField(node.properties.moveDeclarationKind || ''),
+                ].join(','),
+              );
+            } else if (node.label === 'EnumVariant') {
+              await mlWriter.addRow(
+                [
+                  ...baseFields,
+                  escapeCSVField(node.properties.language || ''),
+                  escapeCSVField(node.properties.qualifiedName || ''),
+                  escapeCSVField(String(node.properties.parentEnum || '')),
+                  escapeCSVField(String(node.properties.moduleQualifiedName || '')),
+                  escapeCSVField(String(node.properties.variantKind || '')),
+                  escapeCSVJson(node.properties.fields),
+                ].join(','),
+              );
+            } else if (node.label === 'Const') {
+              await mlWriter.addRow(
+                [
+                  ...baseFields,
+                  escapeCSVField(node.properties.language || ''),
+                  escapeCSVField(node.properties.qualifiedName || ''),
+                  escapeCSVField(node.properties.moduleQualifiedName || ''),
+                  escapeCSVField(String(node.properties.constType ?? node.properties.declaredType ?? '')),
+                  escapeCSVField(String(node.properties.constValue ?? node.properties.value ?? '')),
+                  escapeCSVBoolean(node.properties.isErrorCode),
+                ].join(','),
+              );
+            } else if (node.label === 'Module') {
+              await mlWriter.addRow(
+                [
+                  ...baseFields,
+                  escapeCSVField(node.properties.language || ''),
+                  escapeCSVField(node.properties.qualifiedName || ''),
+                  escapeCSVField(node.properties.moduleAddress || ''),
+                  escapeCSVStringArray(node.properties.attributes),
+                ].join(','),
+              );
+            } else {
+              await mlWriter.addRow(
+                [
+                  ...baseFields,
+                  ...(node.label === 'Property'
+                    ? [escapeCSVField(node.properties.declaredType || '')]
+                    : []),
+                ].join(','),
+              );
+            }
           }
         }
         break;
