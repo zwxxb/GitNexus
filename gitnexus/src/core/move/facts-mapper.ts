@@ -16,10 +16,19 @@ import {
   moveModuleNodeId,
   moveFunctionNodeId,
   moveStructNodeId,
+  moveEnumNodeId,
   moveConstNodeId,
   moveEnumVariantNodeId,
   parseMoveModuleQualifiedName,
 } from './symbol-id.js';
+import {
+  ERROR_CODE_PATTERN,
+  MOVE_ABILITY,
+  MOVE_ATTR,
+  MOVE_EDGE_REASON,
+  MOVE_LANGUAGE,
+  moveRepoRelativePath,
+} from './constants.js';
 
 export interface MoveFactsMapResult {
   nodes: GraphNode[];
@@ -32,17 +41,16 @@ export interface MoveFactsMapResult {
   structNodeMap: Map<string, string>;
 }
 
-/** Error-code constant naming convention (e.g. `E_NOT_REGISTERED`). */
-const ERROR_CODE_PATTERN = /^E[_A-Z]/;
-
-function enumNodeId(enumQualifiedName: string, filePath: string): string {
-  return `Enum:${filePath}:${enumQualifiedName}`;
-}
-
 /** Strip generic type arguments: `CoinStore<CoinType>` → `CoinStore`. */
 function stripTypeArgs(typeName: string): string {
   const idx = typeName.indexOf('<');
   return (idx === -1 ? typeName : typeName.slice(0, idx)).trim();
+}
+
+/** Local name of a (possibly already-local) symbol: `0xa::coin::CoinStore` → `CoinStore`. */
+function localName(qualifiedName: string): string {
+  const sep = qualifiedName.lastIndexOf('::');
+  return sep === -1 ? qualifiedName : qualifiedName.slice(sep + 2);
 }
 
 /** Defensive: move-flow omits optional array fields for some symbols. */
@@ -62,16 +70,6 @@ function mapTypeParams(
 
 function attributeNames(attributes: { name: string }[] | null | undefined): string[] {
   return arr(attributes).map((a) => a.name);
-}
-
-/** Make an absolute path repo-relative so node IDs and File-node links align. */
-function relativize(absPath: string, repoPath?: string): string {
-  if (!repoPath) return absPath;
-  if (absPath.startsWith(repoPath)) {
-    const rel = absPath.slice(repoPath.length);
-    return rel.startsWith('/') ? rel.slice(1) : rel;
-  }
-  return absPath;
 }
 
 /**
@@ -115,7 +113,7 @@ export function mapFactsToGraph(
   // ── Pass A: nodes (modules, functions, types, constants) ─────────────────
   for (const [moduleQualified, mod] of Object.entries(facts)) {
     const moduleFileAbs = mod.file ?? packageRoot;
-    const file = relativize(moduleFileAbs, repoPath);
+    const file = moveRepoRelativePath(moduleFileAbs, repoPath);
     const { address, moduleName } = parseMoveModuleQualifiedName(moduleQualified);
     moduleFileMap.set(moduleQualified, file);
 
@@ -126,7 +124,7 @@ export function mapFactsToGraph(
       properties: {
         name: moduleName,
         filePath: file,
-        language: 'move',
+        language: MOVE_LANGUAGE,
         qualifiedName: moduleQualified,
         moduleQualifiedName: moduleQualified,
         moduleAddress: address,
@@ -145,7 +143,7 @@ export function mapFactsToGraph(
     // Functions
     for (const fn of arr(mod.functions)) {
       const fnQualified = `${moduleQualified}::${fn.name}`;
-      const fnFile = relativize(fn.file ?? moduleFileAbs, repoPath);
+      const fnFile = moveRepoRelativePath(fn.file ?? moduleFileAbs, repoPath);
       const fnNodeId = moveFunctionNodeId(fnQualified, fnFile);
       functionNodeMap.set(fnQualified, fnNodeId);
       const attrs = attributeNames(fn.attributes);
@@ -155,7 +153,7 @@ export function mapFactsToGraph(
         properties: {
           name: fn.name,
           filePath: fnFile,
-          language: 'move',
+          language: MOVE_LANGUAGE,
           qualifiedName: fnQualified,
           moduleQualifiedName: moduleQualified,
           moduleAddress: address,
@@ -168,8 +166,8 @@ export function mapFactsToGraph(
           isInline: fn.isInline,
           isNative: fn.isNative,
           isInitModule: fn.name === 'init_module',
-          isTest: attrs.includes('test'),
-          isTestOnly: attrs.includes('test_only'),
+          isTest: attrs.includes(MOVE_ATTR.TEST),
+          isTestOnly: attrs.includes(MOVE_ATTR.TEST_ONLY),
           hasSpec: fn.hasSpec,
           attributes: attrs,
           typeParams: mapTypeParams(fn.typeParams),
@@ -179,7 +177,7 @@ export function mapFactsToGraph(
           locationFidelity: fn.file ? 'precise' : 'package',
         },
       });
-      edge(moduleNodeId, fnNodeId, 'DEFINES', 1.0, 'move-module-defines-function');
+      edge(moduleNodeId, fnNodeId, 'DEFINES', 1.0, MOVE_EDGE_REASON.definesFunction);
 
       for (const r of arr(fn.resourceAccess?.reads)) {
         pendingResource.push({
@@ -213,7 +211,7 @@ export function mapFactsToGraph(
     // Types (structs + enums)
     for (const ty of arr(mod.types)) {
       const tyQualified = `${moduleQualified}::${ty.name}`;
-      const tyFile = relativize(ty.file ?? moduleFileAbs, repoPath);
+      const tyFile = moveRepoRelativePath(ty.file ?? moduleFileAbs, repoPath);
       const attrs = attributeNames(ty.attributes);
       if (ty.kind === 'struct') {
         const structNodeId = moveStructNodeId(tyQualified, tyFile);
@@ -224,16 +222,16 @@ export function mapFactsToGraph(
           properties: {
             name: ty.name,
             filePath: tyFile,
-            language: 'move',
+            language: MOVE_LANGUAGE,
             qualifiedName: tyQualified,
             moduleQualifiedName: moduleQualified,
             moduleAddress: address,
             startLine: ty.span?.[0],
             endLine: ty.span?.[1],
             abilities: arr(ty.abilities),
-            isResource: arr(ty.abilities).includes('key'),
-            isEvent: attrs.includes('event'),
-            isTestOnly: attrs.includes('test_only'),
+            isResource: arr(ty.abilities).includes(MOVE_ABILITY.KEY),
+            isEvent: attrs.includes(MOVE_ATTR.EVENT),
+            isTestOnly: attrs.includes(MOVE_ATTR.TEST_ONLY),
             hasSpec: ty.hasSpec,
             attributes: attrs,
             typeParams: mapTypeParams(ty.typeParams),
@@ -248,9 +246,9 @@ export function mapFactsToGraph(
             locationFidelity: ty.file ? 'precise' : 'package',
           },
         });
-        edge(moduleNodeId, structNodeId, 'DEFINES', 1.0, 'move-module-defines-struct');
+        edge(moduleNodeId, structNodeId, 'DEFINES', 1.0, MOVE_EDGE_REASON.definesStruct);
       } else {
-        const eId = enumNodeId(tyQualified, tyFile);
+        const eId = moveEnumNodeId(tyQualified, tyFile);
         structNodeMap.set(tyQualified, eId);
         nodes.push({
           id: eId,
@@ -258,7 +256,7 @@ export function mapFactsToGraph(
           properties: {
             name: ty.name,
             filePath: tyFile,
-            language: 'move',
+            language: MOVE_LANGUAGE,
             qualifiedName: tyQualified,
             moduleQualifiedName: moduleQualified,
             moduleAddress: address,
@@ -272,7 +270,7 @@ export function mapFactsToGraph(
             locationFidelity: ty.file ? 'precise' : 'package',
           },
         });
-        edge(moduleNodeId, eId, 'DEFINES', 1.0, 'move-module-defines-enum');
+        edge(moduleNodeId, eId, 'DEFINES', 1.0, MOVE_EDGE_REASON.definesEnum);
         for (const variant of arr(ty.variants)) {
           const vId = moveEnumVariantNodeId(tyQualified, variant.name, tyFile);
           nodes.push({
@@ -281,7 +279,7 @@ export function mapFactsToGraph(
             properties: {
               name: variant.name,
               filePath: tyFile,
-              language: 'move',
+              language: MOVE_LANGUAGE,
               qualifiedName: `${tyQualified}::${variant.name}`,
               parentEnum: tyQualified,
               moduleQualifiedName: moduleQualified,
@@ -295,7 +293,7 @@ export function mapFactsToGraph(
               locationFidelity: ty.file ? 'precise' : 'package',
             },
           });
-          edge(eId, vId, 'CONTAINS', 1.0, 'move-enum-contains-variant');
+          edge(eId, vId, 'CONTAINS', 1.0, MOVE_EDGE_REASON.containsVariant);
         }
       }
     }
@@ -310,7 +308,7 @@ export function mapFactsToGraph(
         properties: {
           name: c.name,
           filePath: file,
-          language: 'move',
+          language: MOVE_LANGUAGE,
           qualifiedName: cQualified,
           moduleQualifiedName: moduleQualified,
           declaredType: c.type,
@@ -319,11 +317,20 @@ export function mapFactsToGraph(
           locationFidelity: mod.file ? 'precise' : 'package',
         },
       });
-      edge(moduleNodeId, cNodeId, 'DEFINES', 1.0, 'move-module-defines-const');
+      edge(moduleNodeId, cNodeId, 'DEFINES', 1.0, MOVE_EDGE_REASON.definesConst);
     }
   }
 
   // ── Pass B: resolve resource + friend edges against the full index ───────
+  // Prebuild a local-name → node-id[] index once, so resolveStruct is O(1)
+  // instead of scanning structNodeMap per pending edge (etna-scale hotspot).
+  const structIdsByLocalName = new Map<string, string[]>();
+  for (const [qn, id] of structNodeMap) {
+    const local = localName(qn);
+    const list = structIdsByLocalName.get(local);
+    if (list) list.push(id);
+    else structIdsByLocalName.set(local, [id]);
+  }
   const resolveStruct = (localOrQualified: string, callerModule: string): string | undefined => {
     // Fully-qualified hit (e.g. acquiresInferred values).
     const exact = structNodeMap.get(localOrQualified);
@@ -332,11 +339,8 @@ export function mapFactsToGraph(
     // Same-module preference.
     const sameModule = structNodeMap.get(`${callerModule}::${base}`);
     if (sameModule) return sameModule;
-    // Unique suffix match across the package.
-    const matches: string[] = [];
-    for (const [qn, id] of structNodeMap) {
-      if (qn === base || qn.endsWith(`::${base}`)) matches.push(id);
-    }
+    // Unique local-name match across the package.
+    const matches = structIdsByLocalName.get(localName(base)) ?? [];
     return matches.length === 1 ? matches[0] : undefined;
   };
 
@@ -356,7 +360,7 @@ export function mapFactsToGraph(
     const friendFile = moduleFileMap.get(pf.friend);
     if (!friendFile) continue; // cross-package friend — target node not in this graph slice
     const friendNodeId = moveModuleNodeId(pf.friend, friendFile);
-    edge(pf.moduleNodeId, friendNodeId, 'FRIEND_OF', 1.0, 'move-friend-declaration');
+    edge(pf.moduleNodeId, friendNodeId, 'FRIEND_OF', 1.0, MOVE_EDGE_REASON.friend);
   }
 
   return { nodes, edges, moduleFileMap, functionNodeMap, structNodeMap };

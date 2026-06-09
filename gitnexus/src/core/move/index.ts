@@ -29,6 +29,7 @@ export {
   moveModuleNodeId,
   moveFunctionNodeId,
   moveStructNodeId,
+  moveEnumNodeId,
   moveConstNodeId,
   moveEnumVariantNodeId,
 } from './symbol-id.js';
@@ -38,14 +39,8 @@ export type { MoveConsistencyIssue, MoveConsistencySeverity } from './consistenc
 
 export { createMoveEntryPointEdges } from './entry-points.js';
 
-export {
-  extractMoveAddresses,
-  parseMoveManifest,
-  buildAddressTableForManifest,
-} from './move-toml.js';
-export type { MoveManifestInfo, MoveDependencySpec } from './move-toml.js';
-
 // Compiler-facts types (facts query + module_summary fallback).
+export { moduleSummaryToFacts } from './compiler-facts.js';
 export type {
   MoveFactsMap,
   MoveFactsModule,
@@ -57,8 +52,6 @@ export type {
   MoveFactsAttribute,
   MoveFactsResourceAccess,
   MoveFactsDeclaredAccess,
-  MoveCompilerFacts,
-  MovePackageFacts,
   ModuleSummaryMap,
   CallGraphMap,
 } from './compiler-facts.js';

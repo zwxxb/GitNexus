@@ -7,12 +7,7 @@
  * re-querying move-flow or reparsing signatures independently.
  */
 
-import { parseMoveSignature, type ParsedMoveSignature } from './signature-parser.js';
-
-export interface MoveFlowManifest {
-  source_paths: string[];
-  dep_paths: string[];
-}
+import { parseMoveSignature } from './signature-parser.js';
 
 export interface MoveFlowConstant {
   name: string;
@@ -150,104 +145,67 @@ export interface MoveFactsModule {
 /** The full facts query response: qualified module name → facts. */
 export type MoveFactsMap = Record<string, MoveFactsModule>;
 
-export interface MoveFlowFunctionUsage {
-  called: string[];
-  called_transitive?: string[];
-  used: string[];
-  used_transitive?: string[];
+// ─────────────────────────────────────────────────────────────────────────
+// Fallback: adapt the legacy `module_summary` shape to the `facts` shape so a
+// single graph mapper serves both paths. `module_summary` lacks per-symbol
+// locations, attributes, acquires, resource access, friends, and enum variants,
+// so those degrade to empty (callers mark `locationFidelity: 'package'`).
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Parse a `"name: type"` struct-field string into a structured field. */
+function parseSummaryField(field: string): MoveFactsField {
+  const idx = field.indexOf(':');
+  if (idx === -1) return { name: field.trim(), type: '', positional: false };
+  return { name: field.slice(0, idx).trim(), type: field.slice(idx + 1).trim(), positional: false };
 }
 
-export interface MoveFunctionFact {
-  qualifiedName: string;
-  moduleQualifiedName: string;
-  packageRoot: string;
-  raw: MoveFlowFunction;
-  parsed: ParsedMoveSignature;
-}
-
-export interface MoveModuleFact {
-  qualifiedName: string;
-  packageRoot: string;
-  raw: MoveFlowModuleSummary;
-  functions: MoveFunctionFact[];
-}
-
-export interface MovePackageFacts {
-  packageRoot: string;
-  manifest: MoveFlowManifest;
-  moduleSummary: ModuleSummaryMap;
-  callGraph: CallGraphMap;
-  modules: MoveModuleFact[];
-}
-
-export interface MoveCompilerFacts {
-  packages: ReadonlyMap<string, MovePackageFacts>;
-  modulesByQualifiedName: ReadonlyMap<string, MoveModuleFact>;
-  functionsByQualifiedName: ReadonlyMap<string, MoveFunctionFact>;
-}
-
-export function createEmptyMoveCompilerFacts(): MoveCompilerFacts {
-  return {
-    packages: new Map(),
-    modulesByQualifiedName: new Map(),
-    functionsByQualifiedName: new Map(),
-  };
-}
-
-export function buildMovePackageFacts(input: {
-  packageRoot: string;
-  manifest: MoveFlowManifest;
-  moduleSummary: ModuleSummaryMap;
-  callGraph: CallGraphMap;
-}): MovePackageFacts {
-  const modules: MoveModuleFact[] = [];
-  for (const [moduleQualifiedName, rawModule] of Object.entries(input.moduleSummary)) {
-    const functions: MoveFunctionFact[] = rawModule.functions.map((fn) => {
+/** Adapt a `module_summary` response to the `facts` shape (degraded fidelity). */
+export function moduleSummaryToFacts(summary: ModuleSummaryMap): MoveFactsMap {
+  const out: MoveFactsMap = {};
+  for (const [moduleQualifiedName, mod] of Object.entries(summary)) {
+    const functions: MoveFactsFunction[] = [];
+    for (const fn of mod.functions) {
       const parsed = parseMoveSignature(fn.signature);
-      return {
-        qualifiedName: `${moduleQualifiedName}::${parsed.name || fn.name}`,
-        moduleQualifiedName,
-        packageRoot: input.packageRoot,
-        raw: fn,
-        parsed,
-      };
-    });
-    modules.push({
-      qualifiedName: moduleQualifiedName,
-      packageRoot: input.packageRoot,
-      raw: rawModule,
-      functions,
-    });
-  }
-
-  return {
-    packageRoot: input.packageRoot,
-    manifest: input.manifest,
-    moduleSummary: input.moduleSummary,
-    callGraph: input.callGraph,
-    modules,
-  };
-}
-
-export function mergeMovePackageFacts(
-  facts: MoveCompilerFacts,
-  packageFacts: MovePackageFacts,
-): MoveCompilerFacts {
-  const packages = new Map(facts.packages);
-  const modulesByQualifiedName = new Map(facts.modulesByQualifiedName);
-  const functionsByQualifiedName = new Map(facts.functionsByQualifiedName);
-
-  packages.set(packageFacts.packageRoot, packageFacts);
-  for (const moduleFact of packageFacts.modules) {
-    modulesByQualifiedName.set(moduleFact.qualifiedName, moduleFact);
-    for (const fn of moduleFact.functions) {
-      if (fn.parsed.name) functionsByQualifiedName.set(fn.qualifiedName, fn);
+      if (!parsed.name) continue; // unparseable signature — skip (no orphan node)
+      functions.push({
+        name: parsed.name,
+        visibility: parsed.visibility,
+        isEntry: parsed.isEntry,
+        isInline: false,
+        isNative: false,
+        isView: false,
+        attributes: [],
+        typeParams: parsed.typeParams.map((tp) => ({
+          name: tp.name,
+          abilities: tp.constraints,
+          isPhantom: tp.isPhantom,
+        })),
+        params: parsed.parameters,
+        returnType: parsed.returnType,
+        declaredAccess: [],
+        acquiresInferred: parsed.acquires,
+        resourceAccess: { reads: [], writes: [] },
+        hasSpec: false,
+      });
     }
+    // module_summary cannot distinguish enums from structs, so everything is a struct.
+    const types: MoveFactsType[] = mod.structs.map((s) => ({
+      kind: 'struct',
+      name: s.name,
+      abilities: s.abilities,
+      typeParams: [],
+      fields: s.fields.map(parseSummaryField),
+      attributes: [],
+      hasSpec: false,
+    }));
+    out[moduleQualifiedName] = {
+      friends: [],
+      attributes: [],
+      hasSpecs: false,
+      functions,
+      types,
+      constants: mod.constants,
+    };
   }
-
-  return {
-    packages,
-    modulesByQualifiedName,
-    functionsByQualifiedName,
-  };
+  return out;
 }

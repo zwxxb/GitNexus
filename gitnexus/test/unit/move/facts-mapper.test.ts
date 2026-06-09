@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { mapFactsToGraph } from '../../../src/core/move/facts-mapper.js';
-import type { MoveFactsMap } from '../../../src/core/move/compiler-facts.js';
+import {
+  moduleSummaryToFacts,
+  type MoveFactsMap,
+  type ModuleSummaryMap,
+} from '../../../src/core/move/compiler-facts.js';
 
 // Trimmed-but-faithful slice of a real `move_package_query { query: "facts" }`
 // response for the `coin` fixture (coin + coin_admin modules).
@@ -174,6 +178,26 @@ describe('mapFactsToGraph', () => {
     expect(fn?.properties.isEntry).toBe(true);
     expect(fn?.properties.parameterCount).toBe(0);
     expect(fn?.properties.acquires).toEqual([]);
+  });
+
+  it('fallback: moduleSummaryToFacts feeds the same mapper (degraded, package-fidelity)', () => {
+    const summary: ModuleSummaryMap = {
+      '0xa::coin': {
+        constants: [{ name: 'E_NOT_REGISTERED', type: 'u64', value: '1' }],
+        structs: [{ name: 'CoinStore', abilities: ['key'], fields: ['balance: u64'] }],
+        functions: [{ name: 'register', signature: 'public entry fun register<CoinType>(account: &signer)' }],
+      },
+    };
+    const { nodes } = mapFactsToGraph(moduleSummaryToFacts(summary), '/pkg', '/pkg');
+    const fn = nodes.find((n) => n.properties.name === 'register');
+    expect(fn?.label).toBe('Function');
+    expect(fn?.properties.isEntry).toBe(true);
+    expect(fn?.properties.locationFidelity).toBe('package'); // module_summary has no per-symbol file
+    const cs = nodes.find((n) => n.properties.name === 'CoinStore');
+    expect(cs?.properties.isResource).toBe(true); // key ability survives the adapter
+    expect(nodes.some((n) => n.label === 'Const' && n.properties.name === 'E_NOT_REGISTERED')).toBe(
+      true,
+    );
   });
 
   it('emits Module/Function/Struct/Const nodes and DEFINES edges', () => {

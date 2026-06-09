@@ -8,11 +8,13 @@
  *   - `facts` query available → full-fidelity ingestion (locations, visibility,
  *     entry/view, attributes, acquires, resource reads/writes, friends, enum
  *     variants) via the thin `facts → graph` mapper.
- *   - otherwise → degraded ingestion from `module_summary` + the compiler's
- *     normalized signature string only (no attributes/acquires/friends/enum
- *     variants), with node locations coarsened to the package root.
+ *   - otherwise → degraded ingestion adapted from `module_summary` + the
+ *     compiler's normalized signature string (no attributes/acquires/friends/
+ *     enum variants; node locations coarsened to the package root).
  *
- * Call edges come from the `call_graph` query in both modes.
+ * Both paths funnel through the SAME `mapFactsToGraph` builder — the fallback
+ * adapts `module_summary` to the `facts` shape (`moduleSummaryToFacts`) so node
+ * shapes never diverge. Call edges come from the `call_graph` query in both modes.
  *
  * @deps    structure
  * @reads   scannedFiles (from structure phase)
@@ -30,31 +32,14 @@ import type {
 } from '../ingestion/pipeline-phases/types.js';
 import { getPhaseOutput } from '../ingestion/pipeline-phases/types.js';
 import type { StructureOutput } from '../ingestion/pipeline-phases/structure.js';
-import type { GraphNode } from 'gitnexus-shared';
-import { SupportedLanguages } from 'gitnexus-shared';
+import type { KnowledgeGraph } from '../graph/types.js';
+import { MOVE_EDGE_REASON, moveRepoRelativePath } from './constants.js';
 import type { MoveFlowClient } from './mcp-client.js';
-import { mapFactsToGraph } from './facts-mapper.js';
-import { parseMoveSignature } from './signature-parser.js';
-import {
-  moveConstNodeId,
-  moveFunctionNodeId,
-  moveModuleNodeId,
-  moveStructNodeId,
-  parseMoveModuleQualifiedName,
-} from './symbol-id.js';
-import {
-  buildMovePackageFacts,
-  createEmptyMoveCompilerFacts,
-  mergeMovePackageFacts,
-  type CallGraphMap,
-  type ModuleSummaryMap,
-  type MoveCompilerFacts,
-  type MoveFlowManifest,
-} from './compiler-facts.js';
+import { mapFactsToGraph, type MoveFactsMapResult } from './facts-mapper.js';
+import { moduleSummaryToFacts, type CallGraphMap } from './compiler-facts.js';
+import { moveModuleNodeId } from './symbol-id.js';
 import { validateMoveIngestOutput, type MoveConsistencyIssue } from './consistency.js';
 import { createMoveEntryPointEdges } from './entry-points.js';
-
-const ERROR_CODE_PATTERN = /^E[_A-Z]/;
 
 // ── Phase output ───────────────────────────────────────────────────────────
 
@@ -77,26 +62,27 @@ export interface MoveIngestOutput {
   filePackageMap: ReadonlyMap<string, string>;
   /** Absolute package root → compiler call graph for that package. */
   callGraphByPackage: ReadonlyMap<string, CallGraphMap>;
-  /** Normalized move-flow facts shared by graph and Understand projections. */
-  compilerFacts: MoveCompilerFacts;
   /** Whether the rich `facts` query was used (vs the signature-only fallback). */
   usedFactsQuery: boolean;
   /** Non-fatal consistency issues found after Move ingestion. */
   consistencyIssues: MoveConsistencyIssue[];
 }
 
-function makeRelativePath(absolutePath: string, repoPath: string): string {
-  if (absolutePath.startsWith(repoPath)) {
-    const rel = absolutePath.slice(repoPath.length);
-    return rel.startsWith('/') ? rel.slice(1) : rel;
-  }
-  return absolutePath;
+/** Mutable accumulator shared while ingesting every package. */
+interface MoveIngestState {
+  ingestedFiles: Set<string>;
+  moduleFileMap: Map<string, string>;
+  functionNodeMap: Map<string, string>;
+  structNodeMap: Map<string, string>;
+  modulePackageMap: Map<string, string>;
+  functionPackageMap: Map<string, string>;
+  filePackageMap: Map<string, string>;
+  callGraphByPackage: Map<string, CallGraphMap>;
 }
 
-function emptyOutput(packageRoots: string[]): MoveIngestOutput {
+function createState(): MoveIngestState {
   return {
     ingestedFiles: new Set(),
-    packageRoots,
     moduleFileMap: new Map(),
     functionNodeMap: new Map(),
     structNodeMap: new Map(),
@@ -104,10 +90,48 @@ function emptyOutput(packageRoots: string[]): MoveIngestOutput {
     functionPackageMap: new Map(),
     filePackageMap: new Map(),
     callGraphByPackage: new Map(),
-    compilerFacts: createEmptyMoveCompilerFacts(),
-    usedFactsQuery: false,
+  };
+}
+
+function toOutput(
+  state: MoveIngestState,
+  packageRoots: string[],
+  usedFactsQuery: boolean,
+): MoveIngestOutput {
+  return {
+    ingestedFiles: state.ingestedFiles,
+    packageRoots,
+    moduleFileMap: state.moduleFileMap,
+    functionNodeMap: state.functionNodeMap,
+    structNodeMap: state.structNodeMap,
+    modulePackageMap: state.modulePackageMap,
+    functionPackageMap: state.functionPackageMap,
+    filePackageMap: state.filePackageMap,
+    callGraphByPackage: state.callGraphByPackage,
+    usedFactsQuery,
     consistencyIssues: [],
   };
+}
+
+/** Add a mapped package's nodes/edges to the graph and merge its identity maps. */
+function applyMapped(
+  graph: KnowledgeGraph,
+  mapped: MoveFactsMapResult,
+  pkgRoot: string,
+  state: MoveIngestState,
+): void {
+  for (const node of mapped.nodes) graph.addNode(node);
+  for (const rel of mapped.edges) graph.addRelationship(rel);
+  for (const [qn, file] of mapped.moduleFileMap) {
+    state.moduleFileMap.set(qn, file);
+    state.modulePackageMap.set(qn, pkgRoot);
+    state.filePackageMap.set(file, pkgRoot);
+  }
+  for (const [qn, id] of mapped.functionNodeMap) {
+    state.functionNodeMap.set(qn, id);
+    state.functionPackageMap.set(qn, pkgRoot);
+  }
+  for (const [qn, id] of mapped.structNodeMap) state.structNodeMap.set(qn, id);
 }
 
 export function createMoveIngestPhase(
@@ -123,29 +147,20 @@ export function createMoveIngestPhase(
     ): Promise<MoveIngestOutput> {
       const { scannedFiles, totalFiles } = getPhaseOutput<StructureOutput>(deps, 'structure');
 
-      // Discover Move packages from scanned Move.toml files.
-      const moveTomlFiles = scannedFiles.map((f) => f.path).filter((p) => p.endsWith('Move.toml'));
       const packageRoots = [
-        ...new Set(moveTomlFiles.map((p) => path.dirname(path.resolve(ctx.repoPath, p)))),
+        ...new Set(
+          scannedFiles
+            .map((f) => f.path)
+            .filter((p) => p.endsWith('Move.toml'))
+            .map((p) => path.dirname(path.resolve(ctx.repoPath, p))),
+        ),
       ];
-
       if (!client || packageRoots.length === 0) {
-        return emptyOutput(packageRoots);
+        return toOutput(createState(), packageRoots, false);
       }
 
-      const caps = await client.capabilities();
-      const useFacts = caps.hasFactsQuery;
-
-      const ingestedFiles = new Set<string>();
-      const moduleFileMap = new Map<string, string>();
-      const functionNodeMap = new Map<string, string>();
-      const structNodeMap = new Map<string, string>();
-      const modulePackageMap = new Map<string, string>();
-      const functionPackageMap = new Map<string, string>();
-      const filePackageMap = new Map<string, string>();
-      const callGraphByPackage = new Map<string, CallGraphMap>();
-      const deferredCallGraphs: CallGraphMap[] = [];
-      let compilerFacts = createEmptyMoveCompilerFacts();
+      const useFacts = (await client.capabilities()).hasFactsQuery;
+      const state = createState();
 
       // Mark every scanned .move file under a package root as ingested so the
       // generic parse phase skips them (we never tree-sit Move source).
@@ -153,13 +168,13 @@ export function createMoveIngestPhase(
         if (!f.path.endsWith('.move')) continue;
         const abs = path.resolve(ctx.repoPath, f.path);
         if (packageRoots.some((root) => abs.startsWith(root))) {
-          ingestedFiles.add(makeRelativePath(abs, ctx.repoPath));
+          state.ingestedFiles.add(moveRepoRelativePath(abs, ctx.repoPath));
         }
       }
 
-      // ── Pass 1: nodes (all packages, so cross-package CALLS resolve) ──────
+      // Pass 1: per-package nodes/edges (all packages first, so cross-package
+      // CALLS in Pass 2 can resolve callees in later packages).
       for (const pkgRoot of packageRoots) {
-        const pkgRel = makeRelativePath(pkgRoot, ctx.repoPath);
         try {
           ctx.onProgress({
             phase: 'moveIngest',
@@ -168,53 +183,13 @@ export function createMoveIngestPhase(
             stats: { filesProcessed: 0, totalFiles, nodesCreated: ctx.graph.nodeCount },
           });
 
-          // Call graph drives CALLS edges in both modes.
-          const callGraphData = (await client.callGraph(pkgRoot).catch(() => ({}))) as CallGraphMap;
-          callGraphByPackage.set(pkgRoot, callGraphData);
-          deferredCallGraphs.push(callGraphData);
+          const callGraphData = await client.callGraph(pkgRoot).catch(() => ({}));
+          state.callGraphByPackage.set(pkgRoot, callGraphData);
 
-          if (useFacts) {
-            // Primary path: the rich `facts` query is the *only* move-flow call
-            // on the critical path — no module_summary, no signature re-parsing.
-            const facts = await client.facts(pkgRoot);
-            const mapped = mapFactsToGraph(facts, pkgRoot, ctx.repoPath);
-            for (const node of mapped.nodes) ctx.graph.addNode(node);
-            for (const rel of mapped.edges) ctx.graph.addRelationship(rel);
-            for (const [qn, file] of mapped.moduleFileMap) {
-              moduleFileMap.set(qn, file);
-              modulePackageMap.set(qn, pkgRoot);
-              filePackageMap.set(file, pkgRoot);
-            }
-            for (const [qn, id] of mapped.functionNodeMap) {
-              functionNodeMap.set(qn, id);
-              functionPackageMap.set(qn, pkgRoot);
-            }
-            for (const [qn, id] of mapped.structNodeMap) structNodeMap.set(qn, id);
-          } else {
-            // Degraded path: module_summary + normalized signature only (no
-            // attributes/acquires/friends/enum-variants, package-root locations).
-            const manifest = (await client
-              .manifest(pkgRoot)
-              .catch(() => ({ source_paths: [], dep_paths: [] }))) as MoveFlowManifest;
-            const summary = (await client.moduleSummary(pkgRoot)) as ModuleSummaryMap;
-            compilerFacts = mergeMovePackageFacts(
-              compilerFacts,
-              buildMovePackageFacts({
-                packageRoot: pkgRoot,
-                manifest,
-                moduleSummary: summary,
-                callGraph: callGraphData,
-              }),
-            );
-            ingestFromModuleSummary(ctx, summary, pkgRoot, pkgRel, {
-              moduleFileMap,
-              functionNodeMap,
-              structNodeMap,
-              modulePackageMap,
-              functionPackageMap,
-              filePackageMap,
-            });
-          }
+          const factsMap = useFacts
+            ? await client.facts(pkgRoot)
+            : moduleSummaryToFacts(await client.moduleSummary(pkgRoot));
+          applyMapped(ctx.graph, mapFactsToGraph(factsMap, pkgRoot, ctx.repoPath), pkgRoot, state);
         } catch (err) {
           ctx.onProgress({
             phase: 'moveIngest',
@@ -227,235 +202,109 @@ export function createMoveIngestPhase(
         }
       }
 
-      // ── Pass 2: CALLS edges (now functionNodeMap has every package) ──────
-      for (const callGraphData of deferredCallGraphs) {
-        for (const [callerQualified, callees] of Object.entries(callGraphData)) {
-          const callerId = functionNodeMap.get(callerQualified);
-          if (!callerId) continue;
-          for (const calleeQualified of callees) {
-            const calleeId = functionNodeMap.get(calleeQualified);
-            if (!calleeId) continue;
-            ctx.graph.addRelationship({
-              id: `rel:${randomUUID()}`,
-              sourceId: callerId,
-              targetId: calleeId,
-              type: 'CALLS',
-              confidence: 1.0,
-              reason: 'move-compiler-call-graph',
-            });
-          }
-        }
-      }
+      // Pass 2+: link edges that need the full cross-package node index.
+      linkCallEdges(ctx.graph, state);
+      linkFileImports(ctx.graph, state);
+      linkFileModuleContains(ctx.graph, state);
 
-      // ── Pass 3: File→File IMPORTS from cross-module calls ────────────────
-      const importPairs = new Set<string>();
-      ctx.graph.forEachRelationship((r) => {
-        if (r.type !== 'IMPORTS') return;
-        if (!r.sourceId.startsWith('File:') || !r.targetId.startsWith('File:')) return;
-        importPairs.add(`${r.sourceId.slice(5)}\0${r.targetId.slice(5)}`);
-      });
-      for (const callGraphData of deferredCallGraphs) {
-        for (const [callerQualified, callees] of Object.entries(callGraphData)) {
-          const callerModule = callerQualified.slice(0, callerQualified.lastIndexOf('::'));
-          const callerFile = moduleFileMap.get(callerModule);
-          if (!callerFile) continue;
-          for (const calleeQualified of callees) {
-            const calleeModule = calleeQualified.slice(0, calleeQualified.lastIndexOf('::'));
-            const calleeFile = moduleFileMap.get(calleeModule);
-            if (!calleeFile || calleeFile === callerFile) continue;
-            const pairKey = `${callerFile}\0${calleeFile}`;
-            if (importPairs.has(pairKey)) continue;
-            importPairs.add(pairKey);
-            const sourceFileId = `File:${callerFile}`;
-            const targetFileId = `File:${calleeFile}`;
-            if (ctx.graph.getNode(sourceFileId) && ctx.graph.getNode(targetFileId)) {
-              ctx.graph.addRelationship({
-                id: `rel:${randomUUID()}`,
-                sourceId: sourceFileId,
-                targetId: targetFileId,
-                type: 'IMPORTS',
-                confidence: 0.9,
-                reason: 'move-cross-module-dependency',
-              });
-            }
-          }
-        }
-      }
-
-      // File→Module CONTAINS where the File node exists.
-      for (const [qn, file] of moduleFileMap) {
-        const fileNodeId = `File:${file}`;
-        const moduleNodeId = moveModuleNodeId(qn, file);
-        if (ctx.graph.getNode(fileNodeId) && ctx.graph.getNode(moduleNodeId)) {
-          ctx.graph.addRelationship({
-            id: `rel:${randomUUID()}`,
-            sourceId: fileNodeId,
-            targetId: moduleNodeId,
-            type: 'CONTAINS',
-            confidence: 1.0,
-            reason: 'move-module-in-file',
-          });
-        }
-      }
-
-
-      const output: MoveIngestOutput = {
-        ingestedFiles,
-        packageRoots,
-        moduleFileMap,
-        functionNodeMap,
-        structNodeMap,
-        modulePackageMap,
-        functionPackageMap,
-        filePackageMap,
-        callGraphByPackage,
-        compilerFacts,
-        usedFactsQuery: useFacts,
-        consistencyIssues: [],
-      };
-
-      // Entry-point edges (entry/view/init_module) from node flags.
+      const output = toOutput(state, packageRoots, useFacts);
       createMoveEntryPointEdges(ctx.graph, output);
 
       output.consistencyIssues = validateMoveIngestOutput(ctx.graph, output);
+      reportConsistencyIssues(ctx, output.consistencyIssues);
       return output;
     },
   };
 }
 
-/** Degraded ingestion from module_summary + normalized signature (no source). */
-function ingestFromModuleSummary(
-  ctx: PipelineContext,
-  summary: ModuleSummaryMap,
-  pkgRoot: string,
-  pkgRel: string,
-  maps: {
-    moduleFileMap: Map<string, string>;
-    functionNodeMap: Map<string, string>;
-    structNodeMap: Map<string, string>;
-    modulePackageMap: Map<string, string>;
-    functionPackageMap: Map<string, string>;
-    filePackageMap: Map<string, string>;
-  },
-): void {
-  for (const [qualifiedName, mod] of Object.entries(summary)) {
-    const { address, moduleName } = parseMoveModuleQualifiedName(qualifiedName);
-    // module_summary carries no per-module file — coarsen to the package root.
-    const relPath = pkgRel || `${moduleName}.move`;
-    maps.moduleFileMap.set(qualifiedName, relPath);
-    maps.modulePackageMap.set(qualifiedName, pkgRoot);
-    maps.filePackageMap.set(relPath, pkgRoot);
+function relId(): string {
+  return `rel:${randomUUID()}`;
+}
 
-    const moduleId = moveModuleNodeId(qualifiedName, relPath);
-    ctx.graph.addNode({
-      id: moduleId,
-      label: 'Module',
-      properties: {
-        name: moduleName,
-        filePath: relPath,
-        language: SupportedLanguages.Move,
-        isExported: true,
-        moduleAddress: address,
-        qualifiedName,
-        locationFidelity: 'package',
-      },
-    });
-
-    for (const fn of mod.functions) {
-      const parsed = parseMoveSignature(fn.signature);
-      if (!parsed.name) continue;
-      const funcQualified = `${qualifiedName}::${parsed.name}`;
-      const funcId = moveFunctionNodeId(funcQualified, relPath);
-      const funcNode: GraphNode = {
-        id: funcId,
-        label: 'Function',
-        properties: {
-          name: parsed.name,
-          filePath: relPath,
-          language: SupportedLanguages.Move,
-          isExported: parsed.visibility === 'public',
-          visibility: parsed.visibility,
-          ...(parsed.visibilityModifier ? { visibilityModifier: parsed.visibilityModifier } : {}),
-          isEntry: parsed.isEntry,
-          returnType: parsed.returnType ?? undefined,
-          parameterCount: parsed.parameters.length,
-          ...(parsed.typeParams.length > 0 ? { typeParams: parsed.typeParams } : {}),
-          ...(parsed.acquires.length > 0 ? { acquires: parsed.acquires } : {}),
-          qualifiedName: funcQualified,
-          moduleQualifiedName: qualifiedName,
-          locationFidelity: 'package',
-        },
-      };
-      ctx.graph.addNode(funcNode);
-      maps.functionNodeMap.set(funcQualified, funcId);
-      maps.functionPackageMap.set(funcQualified, pkgRoot);
-      ctx.graph.addRelationship({
-        id: `rel:${randomUUID()}`,
-        sourceId: moduleId,
-        targetId: funcId,
-        type: 'DEFINES',
-        confidence: 1.0,
-        reason: 'move-module-defines-function',
-      });
+/** CALLS edges from each package's call graph (resolved across all packages). */
+function linkCallEdges(graph: KnowledgeGraph, state: MoveIngestState): void {
+  for (const callGraph of state.callGraphByPackage.values()) {
+    for (const [callerQualified, callees] of Object.entries(callGraph)) {
+      const callerId = state.functionNodeMap.get(callerQualified);
+      if (!callerId) continue;
+      for (const calleeQualified of callees) {
+        const calleeId = state.functionNodeMap.get(calleeQualified);
+        if (!calleeId) continue;
+        graph.addRelationship({
+          id: relId(),
+          sourceId: callerId,
+          targetId: calleeId,
+          type: 'CALLS',
+          confidence: 1.0,
+          reason: MOVE_EDGE_REASON.calls,
+        });
+      }
     }
+  }
+}
 
-    for (const struct of mod.structs) {
-      const structQualified = `${qualifiedName}::${struct.name}`;
-      const structId = moveStructNodeId(structQualified, relPath);
-      ctx.graph.addNode({
-        id: structId,
-        label: 'Struct',
-        properties: {
-          name: struct.name,
-          filePath: relPath,
-          language: SupportedLanguages.Move,
-          isExported: true,
-          abilities: struct.abilities,
-          isResource: struct.abilities.includes('key'),
-          fieldList: struct.fields,
-          qualifiedName: structQualified,
-          moduleQualifiedName: qualifiedName,
-          locationFidelity: 'package',
-        },
-      });
-      maps.structNodeMap.set(structQualified, structId);
-      ctx.graph.addRelationship({
-        id: `rel:${randomUUID()}`,
-        sourceId: moduleId,
-        targetId: structId,
-        type: 'DEFINES',
-        confidence: 1.0,
-        reason: 'move-module-defines-struct',
-      });
+/** File→File IMPORTS derived from cross-module CALLS (deduped against existing). */
+function linkFileImports(graph: KnowledgeGraph, state: MoveIngestState): void {
+  const seen = new Set<string>();
+  graph.forEachRelationship((r) => {
+    if (r.type !== 'IMPORTS') return;
+    if (!r.sourceId.startsWith('File:') || !r.targetId.startsWith('File:')) return;
+    seen.add(`${r.sourceId.slice(5)}\0${r.targetId.slice(5)}`);
+  });
+  const moduleOf = (qualified: string): string => qualified.slice(0, qualified.lastIndexOf('::'));
+  for (const callGraph of state.callGraphByPackage.values()) {
+    for (const [callerQualified, callees] of Object.entries(callGraph)) {
+      const callerFile = state.moduleFileMap.get(moduleOf(callerQualified));
+      if (!callerFile) continue;
+      for (const calleeQualified of callees) {
+        const calleeFile = state.moduleFileMap.get(moduleOf(calleeQualified));
+        if (!calleeFile || calleeFile === callerFile) continue;
+        const key = `${callerFile}\0${calleeFile}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const sourceFileId = `File:${callerFile}`;
+        const targetFileId = `File:${calleeFile}`;
+        if (graph.getNode(sourceFileId) && graph.getNode(targetFileId)) {
+          graph.addRelationship({
+            id: relId(),
+            sourceId: sourceFileId,
+            targetId: targetFileId,
+            type: 'IMPORTS',
+            confidence: 0.9,
+            reason: MOVE_EDGE_REASON.crossModuleDependency,
+          });
+        }
+      }
     }
+  }
+}
 
-    for (const constant of mod.constants) {
-      const constQualified = `${qualifiedName}::${constant.name}`;
-      const constId = moveConstNodeId(constQualified, relPath);
-      ctx.graph.addNode({
-        id: constId,
-        label: 'Const',
-        properties: {
-          name: constant.name,
-          filePath: relPath,
-          language: SupportedLanguages.Move,
-          isExported: true,
-          declaredType: constant.type,
-          value: constant.value,
-          isErrorCode: ERROR_CODE_PATTERN.test(constant.name),
-          qualifiedName: constQualified,
-          moduleQualifiedName: qualifiedName,
-          locationFidelity: 'package',
-        },
-      });
-      ctx.graph.addRelationship({
-        id: `rel:${randomUUID()}`,
-        sourceId: moduleId,
-        targetId: constId,
-        type: 'DEFINES',
+/** File→Module CONTAINS where the File node exists (from the structure phase). */
+function linkFileModuleContains(graph: KnowledgeGraph, state: MoveIngestState): void {
+  for (const [qn, file] of state.moduleFileMap) {
+    const fileNodeId = `File:${file}`;
+    const moduleNodeId = moveModuleNodeId(qn, file);
+    if (graph.getNode(fileNodeId) && graph.getNode(moduleNodeId)) {
+      graph.addRelationship({
+        id: relId(),
+        sourceId: fileNodeId,
+        targetId: moduleNodeId,
+        type: 'CONTAINS',
         confidence: 1.0,
-        reason: 'move-module-defines-const',
+        reason: MOVE_EDGE_REASON.moduleInFile,
       });
     }
   }
+}
+
+/** Surface consistency errors so they reach a human/log (not just the output). */
+function reportConsistencyIssues(ctx: PipelineContext, issues: MoveConsistencyIssue[]): void {
+  const errors = issues.filter((i) => i.severity === 'error');
+  if (errors.length === 0) return;
+  ctx.onProgress({
+    phase: 'moveIngest',
+    percent: 22,
+    message: `Move ingest: ${errors.length} consistency error(s) (e.g. ${errors[0].message})`,
+    stats: { filesProcessed: 0, totalFiles: 0, nodesCreated: ctx.graph.nodeCount },
+  });
 }

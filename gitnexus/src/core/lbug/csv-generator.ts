@@ -669,8 +669,8 @@ export const streamAllCSVsToDisk = async (
                   escapeCSVField(node.properties.language || ''),
                   escapeCSVField(node.properties.qualifiedName || ''),
                   escapeCSVField(node.properties.moduleQualifiedName || ''),
-                  escapeCSVField(String(node.properties.constType ?? node.properties.declaredType ?? '')),
-                  escapeCSVField(String(node.properties.constValue ?? node.properties.value ?? '')),
+                  escapeCSVField(String(node.properties.declaredType ?? '')),
+                  escapeCSVField(String(node.properties.value ?? '')),
                   escapeCSVBoolean(node.properties.isErrorCode),
                 ].join(','),
               );

@@ -8,13 +8,13 @@
 
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { MoveFactsMap } from './compiler-facts.js';
+import type { MoveFactsMap, ModuleSummaryMap, CallGraphMap } from './compiler-facts.js';
 
 interface JsonRpcResponse {
   jsonrpc: '2.0';
   id?: number;
-  result?: any;
-  error?: { code: number; message: string; data?: any };
+  result?: unknown;
+  error?: { code: number; message: string; data?: unknown };
 }
 
 /**
@@ -23,17 +23,14 @@ interface JsonRpcResponse {
  * the client, never the reverse.
  */
 export interface MoveFlowClient {
-  manifest(packagePath: string): Promise<any>;
-  moduleSummary(packagePath: string): Promise<any>;
-  callGraph(packagePath: string): Promise<any>;
-  functionUsage(packagePath: string, fn: string): Promise<any>;
   /** Full-fidelity per-module facts (move_package_query query:"facts"). */
   facts(packagePath: string): Promise<MoveFactsMap>;
+  /** Degraded fallback: per-module constants/structs/function-signatures. */
+  moduleSummary(packagePath: string): Promise<ModuleSummaryMap>;
+  /** Function-level call graph (caller qualified name → callee qualified names). */
+  callGraph(packagePath: string): Promise<CallGraphMap>;
   /** Capability probe (cached): which queries this move-flow build supports. */
   capabilities(): Promise<MoveFlowCapabilities>;
-  status(packagePath: string): Promise<any>;
-  coverage(packagePath: string): Promise<any>;
-  verify(packagePath: string, timeout: number): Promise<any>;
   shutdown(): Promise<void>;
 }
 
@@ -267,34 +264,25 @@ export class MoveFlowMcpClient implements MoveFlowClient {
     });
   }
 
-  async manifest(packagePath: string) {
-    return this.callTool('move_package_manifest', { package_path: packagePath });
-  }
-
-  async moduleSummary(packagePath: string) {
-    return this.callTool('move_package_query', {
+  async moduleSummary(packagePath: string): Promise<ModuleSummaryMap> {
+    return (await this.callTool('move_package_query', {
       package_path: packagePath,
       query: 'module_summary',
-    });
+    })) as ModuleSummaryMap;
   }
 
-  async callGraph(packagePath: string) {
-    return this.callTool('move_package_query', { package_path: packagePath, query: 'call_graph' });
-  }
-
-  async functionUsage(packagePath: string, fn: string) {
-    return this.callTool('move_package_query', {
+  async callGraph(packagePath: string): Promise<CallGraphMap> {
+    return (await this.callTool('move_package_query', {
       package_path: packagePath,
-      query: 'function_usage',
-      function: fn,
-    });
+      query: 'call_graph',
+    })) as CallGraphMap;
   }
 
   async facts(packagePath: string): Promise<MoveFactsMap> {
-    return this.callTool('move_package_query', {
+    return (await this.callTool('move_package_query', {
       package_path: packagePath,
       query: 'facts',
-    });
+    })) as MoveFactsMap;
   }
 
   /** Raw JSON-RPC request (non-`tools/call`), e.g. `tools/list`. */
@@ -333,18 +321,6 @@ export class MoveFlowMcpClient implements MoveFlowClient {
       }
     })();
     return this.capsPromise;
-  }
-
-  async status(packagePath: string) {
-    return this.callTool('move_package_status', { package_path: packagePath });
-  }
-
-  async coverage(packagePath: string) {
-    return this.callTool('move_package_coverage', { package_path: packagePath });
-  }
-
-  async verify(packagePath: string, timeout: number) {
-    return this.callTool('move_package_verify', { package_path: packagePath, timeout });
   }
 
   async shutdown(): Promise<void> {

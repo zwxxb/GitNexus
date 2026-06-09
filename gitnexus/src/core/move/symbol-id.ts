@@ -45,6 +45,10 @@ export function moveStructNodeId(structQualifiedName: string, filePath: string):
   return `Struct:${filePath}:${structQualifiedName}`;
 }
 
+export function moveEnumNodeId(enumQualifiedName: string, filePath: string): string {
+  return `Enum:${filePath}:${enumQualifiedName}`;
+}
+
 export function moveConstNodeId(constQualifiedName: string, filePath: string): string {
   return `Const:${filePath}:${constQualifiedName}`;
 }
