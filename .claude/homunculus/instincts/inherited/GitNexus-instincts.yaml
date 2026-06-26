@@ -1,0 +1,690 @@
+# Instincts generated from https://github.com/zwxxb/GitNexus
+# Generated: 2026-06-26T17:48:16.954Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: GitNexus-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: feat, fix, test, docs, refactor
+
+## Evidence
+
+- 19 commits analyzed
+- Detected conventional commit pattern
+- Examples: feat(move): add Move language + schema (EnumVariant, resource/friend edges, facts node props) to shared, test(move): live end-to-end ingestion against real move-flow (facts query, full fidelity)
+
+---
+id: GitNexus-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Commit Length
+
+## Action
+
+Write detailed commit messages (~103 characters for first line)
+
+## Evidence
+
+- Average commit message length: 103 chars
+- Based on 19 commits
+
+---
+id: GitNexus-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: GitNexus-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: GitNexus-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: GitNexus-arch-type-based
+trigger: "when adding new code"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Arch Type Based
+
+## Action
+
+Place code in the appropriate type folder (components/, services/, utils/, etc.)
+
+## Evidence
+
+- Type-based module organization detected
+- Folders: 
+
+---
+id: GitNexus-test-framework
+trigger: "when writing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Test Framework
+
+## Action
+
+Use vitest as the test framework
+
+## Evidence
+
+- Test framework detected: vitest
+- File pattern: *.test.ts
+
+---
+id: GitNexus-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Test Naming
+
+## Action
+
+Name test files using the pattern: *.test.ts
+
+## Evidence
+
+- File pattern: *.test.ts
+- Consistent across test files
+
+---
+id: GitNexus-test-mocking
+trigger: "when mocking dependencies in tests"
+confidence: 0.75
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Test Mocking
+
+## Action
+
+Use vi.mock for mocking
+
+## Evidence
+
+- Mocking pattern detected: vi.mock
+- Consistent across test files
+
+---
+id: GitNexus-test-types
+trigger: "when planning tests for a feature"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Test Types
+
+## Action
+
+Write unit, integration tests to match project standards
+
+## Evidence
+
+- Test types detected: unit, integration
+- Coverage config: no
+
+---
+id: GitNexus-workflow-feature-development
+trigger: "when implementing a new feature"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Workflow Feature Development
+
+## Action
+
+Follow the feature-development workflow:
+1. Add feature implementation
+2. Add tests for feature
+3. Update documentation
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~16x per month
+- Files: gitnexus-shared/src/graph/*, gitnexus-shared/src/*, gitnexus-shared/src/lbug/*
+
+---
+id: GitNexus-workflow-add-or-update-move-schema-and-mapper
+trigger: "when doing add or update move schema and mapper"
+confidence: 0.65
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Workflow Add Or Update Move Schema And Mapper
+
+## Action
+
+Follow the add-or-update-move-schema-and-mapper workflow:
+1. Edit Move schema definition files (e.g., lbug/schema.ts, lbug/schema-constants.ts)
+2. Update facts-mapper logic (core/move/facts-mapper.ts)
+3. Update CSV generator or lbug adapter if needed (core/lbug/csv-generator.ts, core/lbug/lbug-adapter.ts)
+4. Update or add relevant tests (test/unit/move/facts-mapper.test.ts, test/unit/schema.test.ts)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~3x per month
+- Files: gitnexus/src/core/lbug/schema.ts, gitnexus/src/core/lbug/schema-constants.ts, gitnexus/src/core/move/facts-mapper.ts
+
+---
+id: GitNexus-workflow-implement-or-update-move-ingestion-pipeline
+trigger: "when doing implement or update move ingestion pipeline"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Workflow Implement Or Update Move Ingestion Pipeline
+
+## Action
+
+Follow the implement-or-update-move-ingestion-pipeline workflow:
+1. Edit or add ingestion pipeline phase files (core/ingestion/pipeline-phases/*.ts, core/ingestion/pipeline.ts)
+2. Update or add Move-specific ingestion logic (core/ingestion/languages/move.ts, core/ingestion/model/registration-table.ts)
+3. Update or add tests if needed
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: gitnexus/src/core/ingestion/pipeline-phases/parse.ts, gitnexus/src/core/ingestion/pipeline.ts, gitnexus/src/core/ingestion/languages/move.ts
+
+---
+id: GitNexus-workflow-extend-move-compiler-facts-and-client
+trigger: "when doing extend move compiler facts and client"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Workflow Extend Move Compiler Facts And Client
+
+## Action
+
+Follow the extend-move-compiler-facts-and-client workflow:
+1. Edit or add compiler facts extraction logic (core/move/compiler-facts.ts, core/move/signature-parser.ts, core/move/symbol-id.ts)
+2. Update or add client logic (core/move/mcp-client.ts)
+3. Update or add relevant tests (test/unit/move/mcp-client.test.ts, test/unit/move/signature-parser.test.ts)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: gitnexus/src/core/move/compiler-facts.ts, gitnexus/src/core/move/mcp-client.ts, gitnexus/src/core/move/signature-parser.ts
+
+---
+id: GitNexus-workflow-add-or-update-move-related-tests
+trigger: "when doing add or update move related tests"
+confidence: 0.65
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Workflow Add Or Update Move Related Tests
+
+## Action
+
+Follow the add-or-update-move-related-tests workflow:
+1. Add or update test files for Move features (test/unit/move/*.test.ts, test/integration/move-live.test.ts)
+2. Adjust test assertions as needed for new schema or ingestion logic
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~3x per month
+- Files: gitnexus/test/unit/move/facts-mapper.test.ts, gitnexus/test/unit/move/mcp-client.test.ts, gitnexus/test/unit/move/signature-parser.test.ts
+
+---
+id: GitNexus-workflow-document-move-language-support
+trigger: "when doing document move language support"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/zwxxb/GitNexus
+---
+
+# GitNexus Workflow Document Move Language Support
+
+## Action
+
+Follow the document-move-language-support workflow:
+1. Add or update Move-related documentation files (docs/code-indexing/move/*.md, docs/superpowers/plans/*.md, docs/superpowers/specs/*.md)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: docs/code-indexing/move/adaptability-v166.md, docs/code-indexing/move/mcp-audit-v166.md, docs/code-indexing/move/move-flow-facts-spec.md
+
+---
+id: gitnexus-instinct-naming-files
+trigger: "When creating or renaming a file"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Naming Files
+
+## Action
+
+Use camelCase for file names
+
+## Evidence
+
+- Pattern in namingConventions.files
+- Observed in gitnexus-shared/src/graph/types.ts
+
+---
+id: gitnexus-instinct-naming-functions
+trigger: "When defining a function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Naming Functions
+
+## Action
+
+Use camelCase for function names
+
+## Evidence
+
+- Pattern in namingConventions.functions
+- Seen in gitnexus-shared/src/index.ts
+
+---
+id: gitnexus-instinct-naming-classes
+trigger: "When defining a class"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Naming Classes
+
+## Action
+
+Use PascalCase for class names
+
+## Evidence
+
+- Pattern in namingConventions.classes
+- Seen in gitnexus-shared/src/graph/types.ts
+
+---
+id: gitnexus-instinct-naming-constants
+trigger: "When defining a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Naming Constants
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for constant names
+
+## Evidence
+
+- Pattern in namingConventions.constants
+- Seen in gitnexus/src/core/lbug/schema-constants.ts
+
+---
+id: gitnexus-instinct-imports
+trigger: "When importing modules"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Imports
+
+## Action
+
+Use relative import paths
+
+## Evidence
+
+- Pattern in importStyle
+- Seen in gitnexus-shared/src/graph/types.ts
+
+---
+id: gitnexus-instinct-exports
+trigger: "When exporting from a module"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Exports
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in exportStyle
+- Seen in gitnexus-shared/src/graph/types.ts
+
+---
+id: gitnexus-instinct-test-file-pattern
+trigger: "When creating a test file"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Test File Pattern
+
+## Action
+
+Name the file with the pattern *.test.ts
+
+## Evidence
+
+- Pattern in testing.filePattern
+- Seen in gitnexus/test/unit/move/facts-mapper.test.ts
+
+---
+id: gitnexus-instinct-test-framework
+trigger: "When writing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Test Framework
+
+## Action
+
+Use vitest as the testing framework
+
+## Evidence
+
+- Pattern in testing.framework
+- Seen in gitnexus/test/unit/move/facts-mapper.test.ts
+
+---
+id: gitnexus-instinct-test-mocking
+trigger: "When mocking dependencies in tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Test Mocking
+
+## Action
+
+Use vi.mock for mocking
+
+## Evidence
+
+- Pattern in testing.mockingStyle
+- Seen in gitnexus/test/unit/move/mcp-client.test.ts
+
+---
+id: gitnexus-instinct-test-types
+trigger: "When deciding test coverage"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Test Types
+
+## Action
+
+Write both unit and integration tests
+
+## Evidence
+
+- Pattern in testing.testTypes
+- Seen in gitnexus/test/unit/move/facts-mapper.test.ts
+- gitnexus/test/integration/move-live.test.ts
+
+---
+id: gitnexus-instinct-git-commit-format
+trigger: "When writing a commit message"
+confidence: 0.95
+domain: git
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Git Commit Format
+
+## Action
+
+Use conventional commits with type prefix (feat, fix, test, docs, refactor, chore)
+
+## Evidence
+
+- Pattern in commits.prefixes
+- Seen in commit 'feat(move): add Move language + schema...'
+
+---
+id: gitnexus-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.8
+domain: git
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Git Commit Length
+
+## Action
+
+Write descriptive commit messages averaging around 100 characters
+
+## Evidence
+
+- Pattern in commits.averageLength
+- Seen in commit examples
+
+---
+id: gitnexus-instinct-add-or-update-move-schema-and-mapper
+trigger: "When someone wants to support new Move language features or fix schema/mapping bugs"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Add Or Update Move Schema And Mapper
+
+## Action
+
+Edit schema definition files, update facts-mapper, update CSV generator or adapter if needed, and add or update relevant tests
+
+## Evidence
+
+- Workflow 'add-or-update-move-schema-and-mapper'
+- Pattern in commit sequence and files involved
+
+---
+id: gitnexus-instinct-implement-or-update-move-ingestion-pipeline
+trigger: "When someone wants to add new ingestion phases or adjust how Move files are processed"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Implement Or Update Move Ingestion Pipeline
+
+## Action
+
+Edit or add ingestion pipeline phase files, update Move-specific ingestion logic, and update or add tests if needed
+
+## Evidence
+
+- Workflow 'implement-or-update-move-ingestion-pipeline'
+- Pattern in commit sequence and files involved
+
+---
+id: gitnexus-instinct-extend-move-compiler-facts-and-client
+trigger: "When someone wants to support new facts from the Move compiler or enhance the client interface"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Extend Move Compiler Facts And Client
+
+## Action
+
+Edit or add compiler facts extraction logic, update or add client logic, and update or add relevant tests
+
+## Evidence
+
+- Workflow 'extend-move-compiler-facts-and-client'
+- Pattern in commit sequence and files involved
+
+---
+id: gitnexus-instinct-add-or-update-move-related-tests
+trigger: "When someone adds or changes Move language support or ingestion logic"
+confidence: 0.88
+domain: workflow
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Add Or Update Move Related Tests
+
+## Action
+
+Add or update test files for Move features and adjust test assertions as needed
+
+## Evidence
+
+- Workflow 'add-or-update-move-related-tests'
+- Pattern in commit sequence and files involved
+
+---
+id: gitnexus-instinct-document-move-language-support
+trigger: "When someone wants to document new Move features, plans, or audit findings"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: zwxxb/GitNexus
+---
+
+# Gitnexus Instinct Document Move Language Support
+
+## Action
+
+Add or update Move-related documentation files
+
+## Evidence
+
+- Workflow 'document-move-language-support'
+- Pattern in commit sequence and files involved
+
