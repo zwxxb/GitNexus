@@ -58,14 +58,13 @@ function arr<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
-function mapTypeParams(
-  typeParams: MoveFactsTypeParam[] | null | undefined,
-): Array<{ name: string; constraints?: string[]; isPhantom?: boolean }> {
-  return arr(typeParams).map((tp) => ({
+function typeParamsJson(typeParams: MoveFactsTypeParam[] | null | undefined): string {
+  const list = arr(typeParams).map((tp) => ({
     name: tp.name,
     constraints: arr(tp.abilities),
     isPhantom: tp.isPhantom,
   }));
+  return JSON.stringify(list);
 }
 
 function attributeNames(attributes: { name: string }[] | null | undefined): string[] {
@@ -156,7 +155,6 @@ export function mapFactsToGraph(
           language: MOVE_LANGUAGE,
           qualifiedName: fnQualified,
           moduleQualifiedName: moduleQualified,
-          moduleAddress: address,
           startLine: fn.span?.[0],
           endLine: fn.span?.[1],
           visibility: fn.visibility,
@@ -170,7 +168,7 @@ export function mapFactsToGraph(
           isTestOnly: attrs.includes(MOVE_ATTR.TEST_ONLY),
           hasSpec: fn.hasSpec,
           attributes: attrs,
-          typeParams: mapTypeParams(fn.typeParams),
+          typeParamsJson: typeParamsJson(fn.typeParams),
           acquires: arr(fn.acquiresInferred),
           returnType: fn.returnType ?? undefined,
           parameterCount: arr(fn.params).length,
@@ -234,7 +232,7 @@ export function mapFactsToGraph(
             isTestOnly: attrs.includes(MOVE_ATTR.TEST_ONLY),
             hasSpec: ty.hasSpec,
             attributes: attrs,
-            typeParams: mapTypeParams(ty.typeParams),
+            typeParamsJson: typeParamsJson(ty.typeParams),
             fields: (ty.fields ?? []).map((f) => ({
               name: f.name,
               type: f.type,
@@ -265,7 +263,7 @@ export function mapFactsToGraph(
             abilities: arr(ty.abilities),
             hasSpec: ty.hasSpec,
             attributes: attrs,
-            typeParams: mapTypeParams(ty.typeParams),
+            typeParamsJson: typeParamsJson(ty.typeParams),
             moveDeclarationKind: 'enum',
             locationFidelity: ty.file ? 'precise' : 'package',
           },
@@ -284,11 +282,13 @@ export function mapFactsToGraph(
               parentEnum: tyQualified,
               moduleQualifiedName: moduleQualified,
               variantKind: variant.kind,
-              fields: arr(variant.fields).map((f) => ({
-                name: f.name,
-                type: f.type,
-                positional: f.positional,
-              })),
+              fieldsJson: JSON.stringify(
+                arr(variant.fields).map((f) => ({
+                  name: f.name,
+                  type: f.type,
+                  positional: f.positional,
+                })),
+              ),
               attributes: attributeNames(variant.attributes),
               locationFidelity: ty.file ? 'precise' : 'package',
             },
@@ -311,8 +311,8 @@ export function mapFactsToGraph(
           language: MOVE_LANGUAGE,
           qualifiedName: cQualified,
           moduleQualifiedName: moduleQualified,
-          declaredType: c.type,
-          value: c.value,
+          constType: c.type,
+          constValue: c.value,
           isErrorCode: ERROR_CODE_PATTERN.test(c.name),
           locationFidelity: mod.file ? 'precise' : 'package',
         },

@@ -220,4 +220,96 @@ describe('mapFactsToGraph', () => {
     const friendEdge = edges.find((e) => e.type === 'FRIEND_OF');
     expect(friendEdge?.reason).toBe('move-friend-or-package');
   });
+
+  it('serializes Struct typeParams as typeParamsJson string', () => {
+    const { nodes } = mapFactsToGraph(facts, '/pkg');
+    const cs = nodes.find((n) => n.label === 'Struct' && n.properties.name === 'CoinStore');
+    expect(cs?.properties.typeParamsJson).toBe(
+      JSON.stringify([{ name: 'CoinType', constraints: [], isPhantom: true }]),
+    );
+    expect(cs?.properties.typeParams).toBeUndefined();
+  });
+
+  it('serializes Enum typeParams as typeParamsJson string', () => {
+    const enumFacts: MoveFactsMap = {
+      '0xa::orders': {
+        file: '/pkg/sources/orders.move',
+        friends: [],
+        attributes: [],
+        functions: [],
+        types: [
+          {
+            kind: 'enum',
+            name: 'OrderState',
+            file: '/pkg/sources/orders.move',
+            span: [1, 5],
+            abilities: ['drop'],
+            typeParams: [{ name: 'T', abilities: ['copy'], isPhantom: false }],
+            variants: [{ name: 'Open', kind: 'unit', fields: [], attributes: [] }],
+            attributes: [],
+          },
+        ],
+        constants: [],
+      },
+    } as unknown as MoveFactsMap;
+    const { nodes } = mapFactsToGraph(enumFacts, '/pkg');
+    const en = nodes.find((n) => n.label === 'Enum');
+    expect(en?.properties.typeParamsJson).toBe(
+      JSON.stringify([{ name: 'T', constraints: ['copy'], isPhantom: false }]),
+    );
+    expect(en?.properties.typeParams).toBeUndefined();
+  });
+
+  it('exposes EnumVariant attributes on the node', () => {
+    const enumFacts: MoveFactsMap = {
+      '0xa::orders': {
+        file: '/pkg/sources/orders.move',
+        friends: [],
+        attributes: [],
+        functions: [],
+        types: [
+          {
+            kind: 'enum',
+            name: 'OrderState',
+            file: '/pkg/sources/orders.move',
+            span: [1, 5],
+            abilities: [],
+            typeParams: [],
+            variants: [
+              {
+                name: 'Cancelled',
+                kind: 'unit',
+                fields: [],
+                attributes: [{ name: 'deprecated' }],
+              },
+            ],
+            attributes: [],
+          },
+        ],
+        constants: [],
+      },
+    } as unknown as MoveFactsMap;
+    const { nodes } = mapFactsToGraph(enumFacts, '/pkg');
+    const v = nodes.find((n) => n.label === 'EnumVariant');
+    expect(v?.properties.attributes).toEqual(['deprecated']);
+  });
+
+  it('does not write moduleAddress on Function nodes (only Module/Struct/Enum carry it)', () => {
+    const { nodes } = mapFactsToGraph(facts, '/pkg');
+    const fn = nodes.find((n) => n.label === 'Function' && n.properties.name === 'register');
+    expect(fn?.properties.moduleAddress).toBeUndefined();
+    const mod = nodes.find((n) => n.label === 'Module' && n.properties.name === 'coin');
+    expect(mod?.properties.moduleAddress).toBe('0xa');
+    const cs = nodes.find((n) => n.label === 'Struct' && n.properties.name === 'CoinStore');
+    expect(cs?.properties.moduleAddress).toBe('0xa');
+  });
+
+  it('writes Const data under constType/constValue (matching schema column names)', () => {
+    const { nodes } = mapFactsToGraph(facts, '/pkg');
+    const c = nodes.find((n) => n.label === 'Const' && n.properties.name === 'E_NOT_REGISTERED');
+    expect(c?.properties.constType).toBe('u64');
+    expect(c?.properties.constValue).toBe('1');
+    expect(c?.properties.declaredType).toBeUndefined();
+    expect(c?.properties.value).toBeUndefined();
+  });
 });

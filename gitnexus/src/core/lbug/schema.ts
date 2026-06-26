@@ -66,6 +66,7 @@ CREATE NODE TABLE Function (
   attributes STRING[],
   typeParamsJson STRING,
   expectedFailureJson STRING,
+  locationFidelity STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -188,13 +189,16 @@ CREATE NODE TABLE \`${name}\` (
   language STRING,
   qualifiedName STRING,
   moduleQualifiedName STRING,
+  moduleAddress STRING,
   abilities STRING[],
   isResource BOOLEAN,
   isEvent BOOLEAN,
   isTestOnly BOOLEAN,
   fieldList STRING[],
   attributes STRING[],
+  typeParamsJson STRING,
   moveDeclarationKind STRING,
+  locationFidelity STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -213,6 +217,8 @@ CREATE NODE TABLE \`EnumVariant\` (
   moduleQualifiedName STRING,
   variantKind STRING,
   fieldsJson STRING,
+  attributes STRING[],
+  locationFidelity STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -229,6 +235,7 @@ CREATE NODE TABLE \`Module\` (
   qualifiedName STRING,
   moduleAddress STRING,
   attributes STRING[],
+  locationFidelity STRING,
   PRIMARY KEY (id)
 )`;
 
@@ -247,6 +254,7 @@ CREATE NODE TABLE \`Const\` (
   constType STRING,
   constValue STRING,
   isErrorCode BOOLEAN,
+  locationFidelity STRING,
   PRIMARY KEY (id)
 )`;
 

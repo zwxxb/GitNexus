@@ -316,6 +316,7 @@ export const streamAllCSVsToDisk = async (
     'attributes',
     'typeParamsJson',
     'expectedFailureJson',
+    'locationFidelity',
   ].join(',');
   const functionWriter = new BufferedCSVWriter(path.join(csvDir, 'function.csv'), functionHeader);
   const classWriter = new BufferedCSVWriter(path.join(csvDir, 'class.csv'), codeElementHeader);
@@ -362,41 +363,24 @@ export const streamAllCSVsToDisk = async (
   // Move struct/enum/const/module/enum-variant carry compiler-sourced facts.
   const moveStructLikeHeader = [
     multiLangHeader,
-    'language',
-    'qualifiedName',
-    'moduleQualifiedName',
-    'abilities',
-    'isResource',
-    'isEvent',
-    'isTestOnly',
-    'fieldList',
-    'attributes',
-    'moveDeclarationKind',
+    'language', 'qualifiedName', 'moduleQualifiedName', 'moduleAddress',
+    'abilities', 'isResource', 'isEvent', 'isTestOnly',
+    'fieldList', 'attributes', 'typeParamsJson',
+    'moveDeclarationKind', 'locationFidelity',
   ].join(',');
   const moveConstHeader = [
     multiLangHeader,
-    'language',
-    'qualifiedName',
-    'moduleQualifiedName',
-    'constType',
-    'constValue',
-    'isErrorCode',
+    'language', 'qualifiedName', 'moduleQualifiedName',
+    'constType', 'constValue', 'isErrorCode', 'locationFidelity',
   ].join(',');
   const moveEnumVariantHeader = [
     multiLangHeader,
-    'language',
-    'qualifiedName',
-    'parentEnum',
-    'moduleQualifiedName',
-    'variantKind',
-    'fieldsJson',
+    'language', 'qualifiedName', 'parentEnum', 'moduleQualifiedName',
+    'variantKind', 'fieldsJson', 'attributes', 'locationFidelity',
   ].join(',');
   const moveModuleHeader = [
     multiLangHeader,
-    'language',
-    'qualifiedName',
-    'moduleAddress',
-    'attributes',
+    'language', 'qualifiedName', 'moduleAddress', 'attributes', 'locationFidelity',
   ].join(',');
   const MULTI_LANG_TYPES = [
     'Struct',
@@ -613,8 +597,9 @@ export const streamAllCSVsToDisk = async (
                 escapeCSVStringArray(node.properties.acquires),
                 escapeCSVStringArray(node.properties.usedTypes),
                 escapeCSVStringArray(node.properties.attributes),
-                escapeCSVJson(node.properties.typeParams),
+                escapeCSVField(String(node.properties.typeParamsJson ?? '')),
                 escapeCSVJson(node.properties.expectedFailure),
+                escapeCSVField(String(node.properties.locationFidelity ?? '')),
               ].join(','),
             );
           } else {
@@ -641,13 +626,16 @@ export const streamAllCSVsToDisk = async (
                   escapeCSVField(node.properties.language || ''),
                   escapeCSVField(node.properties.qualifiedName || ''),
                   escapeCSVField(node.properties.moduleQualifiedName || ''),
+                  escapeCSVField(node.properties.moduleAddress || ''),
                   escapeCSVStringArray(node.properties.abilities),
                   escapeCSVBoolean(node.properties.isResource),
                   escapeCSVBoolean(node.properties.isEvent),
                   escapeCSVBoolean(node.properties.isTestOnly),
                   escapeCSVStringArray(node.properties.fieldList),
                   escapeCSVStringArray(node.properties.attributes),
+                  escapeCSVField(String(node.properties.typeParamsJson ?? '')),
                   escapeCSVField(node.properties.moveDeclarationKind || ''),
+                  escapeCSVField(String(node.properties.locationFidelity ?? '')),
                 ].join(','),
               );
             } else if (node.label === 'EnumVariant') {
@@ -659,7 +647,9 @@ export const streamAllCSVsToDisk = async (
                   escapeCSVField(String(node.properties.parentEnum || '')),
                   escapeCSVField(String(node.properties.moduleQualifiedName || '')),
                   escapeCSVField(String(node.properties.variantKind || '')),
-                  escapeCSVJson(node.properties.fields),
+                  escapeCSVField(String(node.properties.fieldsJson ?? '')),
+                  escapeCSVStringArray(node.properties.attributes),
+                  escapeCSVField(String(node.properties.locationFidelity ?? '')),
                 ].join(','),
               );
             } else if (node.label === 'Const') {
@@ -669,9 +659,10 @@ export const streamAllCSVsToDisk = async (
                   escapeCSVField(node.properties.language || ''),
                   escapeCSVField(node.properties.qualifiedName || ''),
                   escapeCSVField(node.properties.moduleQualifiedName || ''),
-                  escapeCSVField(String(node.properties.declaredType ?? '')),
-                  escapeCSVField(String(node.properties.value ?? '')),
+                  escapeCSVField(String(node.properties.constType ?? '')),
+                  escapeCSVField(String(node.properties.constValue ?? '')),
                   escapeCSVBoolean(node.properties.isErrorCode),
+                  escapeCSVField(String(node.properties.locationFidelity ?? '')),
                 ].join(','),
               );
             } else if (node.label === 'Module') {
@@ -682,6 +673,7 @@ export const streamAllCSVsToDisk = async (
                   escapeCSVField(node.properties.qualifiedName || ''),
                   escapeCSVField(node.properties.moduleAddress || ''),
                   escapeCSVStringArray(node.properties.attributes),
+                  escapeCSVField(String(node.properties.locationFidelity ?? '')),
                 ].join(','),
               );
             } else {
