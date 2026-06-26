@@ -17,7 +17,7 @@ import {
 
 describe('VALID_RELATION_TYPES', () => {
   it('contains all expected relation types', () => {
-    expect(VALID_RELATION_TYPES.size).toBe(15);
+    expect(VALID_RELATION_TYPES.size).toBe(20);
     for (const t of [
       'CALLS',
       'IMPORTS',
@@ -34,6 +34,11 @@ describe('VALID_RELATION_TYPES', () => {
       'HANDLES_TOOL',
       'ENTRY_POINT_OF',
       'WRAPS',
+      'USES',
+      'ACQUIRES',
+      'READS_RESOURCE',
+      'WRITES_RESOURCE',
+      'USES_TYPE',
     ]) {
       expect(VALID_RELATION_TYPES.has(t)).toBe(true);
     }
@@ -41,7 +46,6 @@ describe('VALID_RELATION_TYPES', () => {
 
   it('rejects invalid relation types', () => {
     expect(VALID_RELATION_TYPES.has('CONTAINS')).toBe(false);
-    expect(VALID_RELATION_TYPES.has('USES')).toBe(false);
     expect(VALID_RELATION_TYPES.has('calls')).toBe(false); // case-sensitive
     expect(VALID_RELATION_TYPES.has('DROP_TABLE')).toBe(false);
   });

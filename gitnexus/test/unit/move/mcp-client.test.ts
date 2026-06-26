@@ -39,8 +39,8 @@ describe('tryCreateMoveFlowClient', () => {
     const client = tryCreateMoveFlowClient();
     expect(client).toBeInstanceOf(MoveFlowMcpClient);
     expect(mockExecFileSync).toHaveBeenCalledWith(
-      '/usr/bin/env',
-      ['move-flow', '--version'],
+      'move-flow',
+      ['--version'],
       expect.objectContaining({ stdio: 'ignore' }),
     );
   });
@@ -102,7 +102,6 @@ describe('detectMoveFlowCapabilities', () => {
   it('reports facts support from a standalone move_package_facts tool name', () => {
     const caps = detectMoveFlowCapabilities(['move_package_query', 'move_package_facts']);
     expect(caps.hasFactsQuery).toBe(true);
-    expect(caps.hasModuleSummary).toBe(true);
   });
 
   it('detects the facts query from the move_package_query inputSchema enum', () => {
@@ -125,7 +124,6 @@ describe('detectMoveFlowCapabilities', () => {
       },
     ]);
     expect(caps.hasFactsQuery).toBe(true);
-    expect(caps.hasModuleSummary).toBe(true);
   });
 
   it('also detects facts from a flat enum schema', () => {
@@ -138,18 +136,16 @@ describe('detectMoveFlowCapabilities', () => {
     expect(caps.hasFactsQuery).toBe(true);
   });
 
-  it('falls back to module_summary when facts is absent', () => {
+  it('reports facts absent when the schema omits it', () => {
     const caps = detectMoveFlowCapabilities([
       { name: 'move_package_query', inputSchema: { $defs: { QueryType: { oneOf: [{ const: 'module_summary' }] } } } },
       'move_package_manifest',
     ]);
     expect(caps.hasFactsQuery).toBe(false);
-    expect(caps.hasModuleSummary).toBe(true);
   });
 
-  it('reports no module_summary when move_package_query is missing entirely', () => {
+  it('reports facts absent when move_package_query is missing entirely', () => {
     const caps = detectMoveFlowCapabilities(['move_package_status']);
     expect(caps.hasFactsQuery).toBe(false);
-    expect(caps.hasModuleSummary).toBe(false);
   });
 });

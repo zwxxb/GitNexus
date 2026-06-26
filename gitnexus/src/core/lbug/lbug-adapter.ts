@@ -1133,10 +1133,10 @@ const getCopyQuery = (table: NodeTableName, filePath: string): string => {
   // Move-augmented tables (compiler-sourced columns). Must match schema.ts +
   // csv-generator.ts header order exactly.
   if (table === 'Function') {
-    return `COPY ${t}(id, name, filePath, startLine, endLine, isExported, content, description, language, qualifiedName, moduleQualifiedName, visibility, visibilityModifier, isEntry, isView, isInitModule, isInline, isNative, isTest, isTestOnly, hasSpec, parameterCount, returnType, acquires, usedTypes, attributes, typeParamsJson, expectedFailureJson, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+    return `COPY ${t}(id, name, filePath, startLine, endLine, isExported, content, description, language, qualifiedName, moduleQualifiedName, visibility, visibilityModifier, isEntry, isView, isInitModule, isInline, isNative, hasSpec, parameterCount, returnType, acquires, usedTypes, attributes, typeParamsJson, expectedFailureJson, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;
   }
   if (table === 'Struct' || table === 'Enum') {
-    return `COPY ${t}(id, name, filePath, startLine, endLine, content, description, language, qualifiedName, moduleQualifiedName, moduleAddress, abilities, isResource, isEvent, isTestOnly, fieldList, attributes, typeParamsJson, moveDeclarationKind, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+    return `COPY ${t}(id, name, filePath, startLine, endLine, content, description, language, qualifiedName, moduleQualifiedName, moduleAddress, abilities, isResource, isEvent, fieldList, attributes, typeParamsJson, moveDeclarationKind, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;
   }
   if (table === 'EnumVariant') {
     return `COPY ${t}(id, name, filePath, startLine, endLine, content, description, language, qualifiedName, parentEnum, moduleQualifiedName, variantKind, fieldsJson, attributes, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;

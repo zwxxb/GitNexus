@@ -134,7 +134,7 @@ export interface PipelineOptions {
    * move-flow MCP client for compiler-first Move/Aptos ingestion. When set, the
    * `moveIngest` phase uses it to ingest every Move package (Move.toml) found in
    * the repo. When `null`/undefined, `moveIngest` is a no-op (non-Move repos).
-   * `run-analyze.ts` creates this lazily only when the repo contains `.move`.
+   * `run-analyze.ts` creates this only when the repo contains a `Move.toml`.
    */
   moveFlowClient?: MoveFlowClient | null;
 }

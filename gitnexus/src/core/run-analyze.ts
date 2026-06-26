@@ -12,6 +12,7 @@
 import path from 'path';
 import fs from 'fs/promises';
 import { execFileSync } from 'child_process';
+import { glob } from 'glob';
 import { runPipelineFromRepo } from './ingestion/pipeline.js';
 import { tryCreateMoveFlowClient } from './move/mcp-client.js';
 import { resetDegradedParseCounter } from './tree-sitter/safe-parse.js';
@@ -183,6 +184,26 @@ const FTS_UNAVAILABLE_MESSAGE =
   'Full-text/BM25 search will be disabled until the LadybugDB FTS extension is ' +
   'installed once with network access (GITNEXUS_LBUG_EXTENSION_INSTALL=auto) or ' +
   'pre-installed for offline use. Run `gitnexus doctor` for details.';
+
+/**
+ * Returns true when the repo contains at least one Move.toml. Cross-platform:
+ * uses the `glob` package (already a dep) instead of shelling out to the
+ * POSIX-only `find` command, so this works on native Windows.
+ */
+export async function repoHasMove(repoPath: string): Promise<boolean> {
+  try {
+    const matches = await glob(['**/Move.toml'], {
+      cwd: repoPath,
+      ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**'],
+      nodir: true,
+      absolute: false,
+      dot: false,
+    });
+    return matches.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 // Re-export the pure flag-derivation helper so external callers (and tests)
 // keep importing from this module's stable surface.
@@ -493,10 +514,10 @@ export async function runFullAnalysis(
   // in-place (cache hits leave entries unchanged; misses add new ones).
   const parseCache = await loadParseCache(storagePath);
 
-  // Compiler-first Move ingestion: create a move-flow client if the binary is
-  // available (returns null otherwise). The `moveIngest` phase no-ops when the
-  // repo has no Move.toml, so this is safe to pass unconditionally.
-  const moveFlowClient = tryCreateMoveFlowClient();
+  // Compiler-first Move ingestion: probe for Move packages before spawning
+  // the move-flow binary — skips the binary probe entirely for repos without
+  // a Move.toml. The `moveIngest` phase no-ops when client is null.
+  const moveFlowClient = (await repoHasMove(repoPath)) ? tryCreateMoveFlowClient() : null;
 
   // ── Phase 1: Full Pipeline (0–60%) ────────────────────────────────
   // `finally` guarantees the spawned move-flow child is released even if the

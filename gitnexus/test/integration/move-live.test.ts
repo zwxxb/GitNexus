@@ -22,7 +22,6 @@ describe.skipIf(!client)('live move-flow ingestion (coin fixture)', () => {
   it('detects the facts query capability', async () => {
     const caps = await client!.capabilities();
     expect(caps.hasFactsQuery).toBe(true);
-    expect(caps.hasModuleSummary).toBe(true);
   });
 
   it('builds a full-fidelity Move graph from compiler facts', async () => {

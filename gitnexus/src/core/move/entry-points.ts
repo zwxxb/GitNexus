@@ -15,6 +15,7 @@ import type { KnowledgeGraph } from '../graph/types.js';
 import type { MoveIngestOutput } from './move-ingest.js';
 import { randomUUID } from 'node:crypto';
 import { moveModuleNodeId, moveModuleQualifiedName } from './symbol-id.js';
+import { MOVE_EDGE_REASON } from './constants.js';
 
 export function createMoveEntryPointEdges(
   graph: KnowledgeGraph,
@@ -38,9 +39,9 @@ export function createMoveEntryPointEdges(
     if (!graph.getNode(moduleNodeId)) continue;
 
     let reason: string;
-    if (isEntry) reason = 'move-entry-function';
-    else if (isView) reason = 'move-view-function';
-    else reason = 'move-init-module';
+    if (isEntry) reason = MOVE_EDGE_REASON.entryFunction;
+    else if (isView) reason = MOVE_EDGE_REASON.viewFunction;
+    else reason = MOVE_EDGE_REASON.initModule;
 
     funcNode.properties.entryPointReason = reason;
 

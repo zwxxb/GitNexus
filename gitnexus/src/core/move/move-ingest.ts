@@ -2,25 +2,21 @@
  * Phase: moveIngest
  *
  * Compiler-first Move ingestion via the move-flow MCP server. **No raw Move
- * source is ever read.** On the first package the phase probes move-flow's
- * capabilities:
+ * source is ever read.** The `facts` query is the ONLY ingestion path: if the
+ * move-flow build doesn't expose it, the phase fails fast with a clear upgrade
+ * error before touching any package. Call edges come from the `call_graph`
+ * query.
  *
- *   - `facts` query available → full-fidelity ingestion (locations, visibility,
- *     entry/view, attributes, acquires, resource reads/writes, friends, enum
- *     variants) via the thin `facts → graph` mapper.
- *   - otherwise → degraded ingestion adapted from `module_summary` + the
- *     compiler's normalized signature string (no attributes/acquires/friends/
- *     enum variants; node locations coarsened to the package root).
- *
- * Both paths funnel through the SAME `mapFactsToGraph` builder — the fallback
- * adapts `module_summary` to the `facts` shape (`moduleSummaryToFacts`) so node
- * shapes never diverge. Call edges come from the `call_graph` query in both modes.
+ * Note: move-flow's `facts` query elides all `#[test]` and `#[test_only]`
+ * symbols (functions, structs, constants). The graph therefore contains only
+ * production symbols; queries to find test functions or exclude tests from
+ * impact do not need a symbol-level test filter.
  *
  * @deps    structure
  * @reads   scannedFiles (from structure phase)
  * @writes  graph (Module/Function/Struct/Enum/EnumVariant/Const nodes +
  *          CALLS/DEFINES/CONTAINS/FRIEND_OF/READS_RESOURCE/WRITES_RESOURCE/
- *          ACQUIRES/ENTRY_POINT_OF/IMPORTS edges)
+ *          ACQUIRES/USES_TYPE/ENTRY_POINT_OF/IMPORTS edges)
  */
 
 import * as path from 'node:path';
@@ -35,9 +31,19 @@ import type { StructureOutput } from '../ingestion/pipeline-phases/structure.js'
 import type { KnowledgeGraph } from '../graph/types.js';
 import { MOVE_EDGE_REASON, moveRepoRelativePath } from './constants.js';
 import type { MoveFlowClient } from './mcp-client.js';
-import { mapFactsToGraph, type MoveFactsMapResult } from './facts-mapper.js';
-import { moduleSummaryToFacts, type CallGraphMap } from './compiler-facts.js';
-import { moveModuleNodeId } from './symbol-id.js';
+import {
+  buildLocalNameIndex,
+  mapFactsToGraph,
+  resolveFriendEdges,
+  resolveResourceEdges,
+  resolveTypeRefEdges,
+  type MoveFactsMapResult,
+  type PendingFriend,
+  type PendingResource,
+  type PendingTypeRef,
+} from './facts-mapper.js';
+import type { CallGraphMap } from './compiler-facts.js';
+import { moveModuleNodeId, moveModuleQualifiedName } from './symbol-id.js';
 import { validateMoveIngestOutput, type MoveConsistencyIssue } from './consistency.js';
 import { createMoveEntryPointEdges } from './entry-points.js';
 
@@ -62,8 +68,8 @@ export interface MoveIngestOutput {
   filePackageMap: ReadonlyMap<string, string>;
   /** Absolute package root → compiler call graph for that package. */
   callGraphByPackage: ReadonlyMap<string, CallGraphMap>;
-  /** Whether the rich `facts` query was used (vs the signature-only fallback). */
-  usedFactsQuery: boolean;
+  /** Resource references dropped during global resolution. */
+  droppedResourceRefs?: { fnNodeId: string; target: string }[];
   /** Non-fatal consistency issues found after Move ingestion. */
   consistencyIssues: MoveConsistencyIssue[];
 }
@@ -78,6 +84,10 @@ interface MoveIngestState {
   functionPackageMap: Map<string, string>;
   filePackageMap: Map<string, string>;
   callGraphByPackage: Map<string, CallGraphMap>;
+  pendingResource: PendingResource[];
+  pendingFriends: PendingFriend[];
+  pendingTypeRef: PendingTypeRef[];
+  droppedResourceRefs: { fnNodeId: string; target: string }[];
 }
 
 function createState(): MoveIngestState {
@@ -90,13 +100,17 @@ function createState(): MoveIngestState {
     functionPackageMap: new Map(),
     filePackageMap: new Map(),
     callGraphByPackage: new Map(),
+    pendingResource: [],
+    pendingFriends: [],
+    pendingTypeRef: [],
+    droppedResourceRefs: [],
   };
 }
 
 function toOutput(
   state: MoveIngestState,
   packageRoots: string[],
-  usedFactsQuery: boolean,
+  consistencyIssues: MoveConsistencyIssue[] = [],
 ): MoveIngestOutput {
   return {
     ingestedFiles: state.ingestedFiles,
@@ -108,8 +122,8 @@ function toOutput(
     functionPackageMap: state.functionPackageMap,
     filePackageMap: state.filePackageMap,
     callGraphByPackage: state.callGraphByPackage,
-    usedFactsQuery,
-    consistencyIssues: [],
+    droppedResourceRefs: state.droppedResourceRefs,
+    consistencyIssues,
   };
 }
 
@@ -132,6 +146,9 @@ function applyMapped(
     state.functionPackageMap.set(qn, pkgRoot);
   }
   for (const [qn, id] of mapped.structNodeMap) state.structNodeMap.set(qn, id);
+  state.pendingResource.push(...mapped.pendingResource);
+  state.pendingFriends.push(...mapped.pendingFriends);
+  state.pendingTypeRef.push(...mapped.pendingTypeRef);
 }
 
 export function createMoveIngestPhase(
@@ -154,12 +171,19 @@ export function createMoveIngestPhase(
             .filter((p) => p.endsWith('Move.toml'))
             .map((p) => path.dirname(path.resolve(ctx.repoPath, p))),
         ),
-      ];
+      ].sort();
       if (!client || packageRoots.length === 0) {
-        return toOutput(createState(), packageRoots, false);
+        return toOutput(createState(), packageRoots);
       }
 
-      const useFacts = (await client.capabilities()).hasFactsQuery;
+      const { hasFactsQuery } = await client.capabilities();
+      if (!hasFactsQuery) {
+        throw new Error(
+          'move-flow is too old or installed without the `facts` query; ' +
+            'GitNexus Move ingestion requires a move-flow build that exposes ' +
+            '`move_package_query { query: "facts" }`. Please upgrade move-flow.',
+        );
+      }
       const state = createState();
 
       // Mark every scanned .move file under a package root as ingested so the
@@ -175,44 +199,32 @@ export function createMoveIngestPhase(
       // Pass 1: per-package nodes/edges (all packages first, so cross-package
       // CALLS in Pass 2 can resolve callees in later packages).
       for (const pkgRoot of packageRoots) {
-        try {
-          ctx.onProgress({
-            phase: 'moveIngest',
-            percent: 18,
-            message: `Ingesting Move package: ${path.basename(pkgRoot)}`,
-            stats: { filesProcessed: 0, totalFiles, nodesCreated: ctx.graph.nodeCount },
-          });
+        ctx.onProgress({
+          phase: 'moveIngest',
+          percent: 18,
+          message: `Ingesting Move package: ${path.basename(pkgRoot)}`,
+          stats: { filesProcessed: 0, totalFiles, nodesCreated: ctx.graph.nodeCount },
+        });
 
-          const callGraphData = await client.callGraph(pkgRoot).catch(() => ({}));
-          state.callGraphByPackage.set(pkgRoot, callGraphData);
+        const callGraphData = await client.callGraph(pkgRoot);
+        state.callGraphByPackage.set(pkgRoot, callGraphData);
 
-          const factsMap = useFacts
-            ? await client.facts(pkgRoot)
-            : moduleSummaryToFacts(await client.moduleSummary(pkgRoot));
-          applyMapped(ctx.graph, mapFactsToGraph(factsMap, pkgRoot, ctx.repoPath), pkgRoot, state);
-        } catch (err) {
-          ctx.onProgress({
-            phase: 'moveIngest',
-            percent: 20,
-            message: `Move ingest skipped ${path.basename(pkgRoot)}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-            stats: { filesProcessed: 0, totalFiles, nodesCreated: ctx.graph.nodeCount },
-          });
-        }
+        const factsMap = await client.facts(pkgRoot);
+        applyMapped(ctx.graph, mapFactsToGraph(factsMap, pkgRoot, ctx.repoPath), pkgRoot, state);
       }
 
       // Pass 2+: link edges that need the full cross-package node index.
       linkCallEdges(ctx.graph, state);
+      linkResourceAndFriendEdges(ctx.graph, state);
       linkFileImports(ctx.graph, state);
       linkFileModuleContains(ctx.graph, state);
 
-      const output = toOutput(state, packageRoots, useFacts);
+      const output = toOutput(state, packageRoots);
       createMoveEntryPointEdges(ctx.graph, output);
 
-      output.consistencyIssues = validateMoveIngestOutput(ctx.graph, output);
-      reportConsistencyIssues(ctx, output.consistencyIssues);
-      return output;
+      const consistencyIssues = validateMoveIngestOutput(ctx.graph, output);
+      reportConsistencyIssues(ctx, consistencyIssues);
+      return { ...output, consistencyIssues };
     },
   };
 }
@@ -243,21 +255,53 @@ function linkCallEdges(graph: KnowledgeGraph, state: MoveIngestState): void {
   }
 }
 
+/** Resource/friend edges from facts, resolved after all package nodes exist. */
+function linkResourceAndFriendEdges(graph: KnowledgeGraph, state: MoveIngestState): void {
+  const structIdsByLocalName = buildLocalNameIndex(state.structNodeMap);
+  resolveResourceEdges(
+    state.pendingResource,
+    state.structNodeMap,
+    structIdsByLocalName,
+    (rel) => graph.addRelationship(rel),
+    (pending) => state.droppedResourceRefs.push({ fnNodeId: pending.fnNodeId, target: pending.target }),
+    (pending) => state.droppedResourceRefs.push({ fnNodeId: pending.fnNodeId, target: pending.target }),
+  );
+  resolveFriendEdges(state.pendingFriends, state.moduleFileMap, (rel) => graph.addRelationship(rel));
+  resolveTypeRefEdges(
+    state.pendingTypeRef,
+    state.structNodeMap,
+    structIdsByLocalName,
+    (rel) => {
+      graph.addRelationship(rel);
+      addUsedType(graph, rel.sourceId, rel.targetId);
+    },
+  );
+}
+
+function addUsedType(graph: KnowledgeGraph, functionNodeId: string, typeNodeId: string): void {
+  const fnNode = graph.getNode(functionNodeId);
+  const typeNode = graph.getNode(typeNodeId);
+  const qualifiedName = typeNode?.properties.qualifiedName;
+  if (!fnNode || typeof qualifiedName !== 'string') return;
+
+  const current = Array.isArray(fnNode.properties.usedTypes) ? fnNode.properties.usedTypes : [];
+  if (current.includes(qualifiedName)) return;
+  fnNode.properties.usedTypes = [...current, qualifiedName];
+}
+
 /** File→File IMPORTS derived from cross-module CALLS (deduped against existing). */
 function linkFileImports(graph: KnowledgeGraph, state: MoveIngestState): void {
   const seen = new Set<string>();
-  graph.forEachRelationship((r) => {
-    if (r.type !== 'IMPORTS') return;
-    if (!r.sourceId.startsWith('File:') || !r.targetId.startsWith('File:')) return;
+  for (const r of graph.iterRelationshipsByType('IMPORTS')) {
+    if (!r.sourceId.startsWith('File:') || !r.targetId.startsWith('File:')) continue;
     seen.add(`${r.sourceId.slice(5)}\0${r.targetId.slice(5)}`);
-  });
-  const moduleOf = (qualified: string): string => qualified.slice(0, qualified.lastIndexOf('::'));
+  }
   for (const callGraph of state.callGraphByPackage.values()) {
     for (const [callerQualified, callees] of Object.entries(callGraph)) {
-      const callerFile = state.moduleFileMap.get(moduleOf(callerQualified));
+      const callerFile = state.moduleFileMap.get(moveModuleQualifiedName(callerQualified));
       if (!callerFile) continue;
       for (const calleeQualified of callees) {
-        const calleeFile = state.moduleFileMap.get(moduleOf(calleeQualified));
+        const calleeFile = state.moduleFileMap.get(moveModuleQualifiedName(calleeQualified));
         if (!calleeFile || calleeFile === callerFile) continue;
         const key = `${callerFile}\0${calleeFile}`;
         if (seen.has(key)) continue;

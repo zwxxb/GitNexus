@@ -586,9 +586,9 @@ WHEN TO USE: After changing group.yaml or re-indexing member repos.`,
     name: 'move_entries',
     description: `List Move/Aptos entry points (compiler-sourced).
 
-WHEN TO USE: To enumerate a Move package's external surface — \`entry\` functions (transaction entry points), \`#[view]\` functions (read-only queries), and \`init_module\` lifecycle hooks. Filter by module, kind, attribute, or spec presence.
+WHEN TO USE: To enumerate a Move package's external surface — \`entry\` functions (transaction entry points), \`#[view]\` functions (read-only queries), and \`init_module\` lifecycle hooks. Filter by module, kind, or attribute.
 
-Returns: { entries: [{ name, qualifiedName, filePath, isEntry, isView, isInitModule, visibility, hasSpec, acquires, attributes, returnType }], count }.`,
+Returns: { entries: [{ name, qualifiedName, filePath, isEntry, isView, isInitModule, visibility, acquires, attributes, returnType }], count }.`,
     annotations: READ_ONLY_TOOL_ANNOTATIONS,
     inputSchema: {
       type: 'object',
@@ -599,9 +599,7 @@ Returns: { entries: [{ name, qualifiedName, filePath, isEntry, isView, isInitMod
           enum: ['entry', 'view', 'init_module', 'inline', 'native'],
           description: 'Restrict to a single entry kind. Omit for entry+view+init_module.',
         },
-        attribute: { type: 'string', description: 'Only functions carrying this attribute (e.g. "view", "test").' },
-        hasSpec: { type: 'boolean', description: 'Only functions with a Move spec block.' },
-        includeTestOnly: { type: 'boolean', description: 'Include #[test_only] functions (default false).' },
+        attribute: { type: 'string', description: 'Only functions carrying this attribute (e.g. "view").' },
         repo: { type: 'string', description: 'Repository name or path.' },
       },
       required: [],
@@ -626,9 +624,9 @@ Returns: { resources: [{ name, qualifiedName, filePath, abilities, fieldList, ac
   },
   {
     name: 'move_impact',
-    description: `Blast radius for a Move/Aptos symbol over Move edges (CALLS / READS_RESOURCE / WRITES_RESOURCE / ACQUIRES).
+    description: `Blast radius for a Move/Aptos symbol over Move edges (CALLS / READS_RESOURCE / WRITES_RESOURCE / ACQUIRES / USES_TYPE).
 
-WHEN TO USE: BEFORE editing a Move function or resource. Reports callers and resource-access dependents. Restricts the generic impact traversal to Move semantic edges.`,
+WHEN TO USE: BEFORE editing a Move function or resource/type. Reports callers, resource-access dependents, and signature type users. Restricts the generic impact traversal to Move semantic edges.`,
     annotations: READ_ONLY_TOOL_ANNOTATIONS,
     inputSchema: {
       type: 'object',

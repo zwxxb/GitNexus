@@ -73,6 +73,7 @@ export const REL_TYPES = [
   'READS_RESOURCE',
   'WRITES_RESOURCE',
   'ACQUIRES',
+  'USES_TYPE',
   'EMITS',
 ] as const;
 

@@ -19,6 +19,7 @@ import {
   moveEnumNodeId,
   moveConstNodeId,
   moveEnumVariantNodeId,
+  moveLocalName,
   parseMoveModuleQualifiedName,
 } from './symbol-id.js';
 import {
@@ -29,6 +30,7 @@ import {
   MOVE_LANGUAGE,
   moveRepoRelativePath,
 } from './constants.js';
+import { extractTypeNames } from './type-parser.js';
 
 export interface MoveFactsMapResult {
   nodes: GraphNode[];
@@ -39,18 +41,38 @@ export interface MoveFactsMapResult {
   functionNodeMap: Map<string, string>;
   /** Struct/enum qualified name → graph node ID. */
   structNodeMap: Map<string, string>;
+  /** Resource edges that need the full cross-package type index. */
+  pendingResource: PendingResource[];
+  /** Friend edges that need the full cross-package module index. */
+  pendingFriends: PendingFriend[];
+  /** Signature type refs that need the full cross-package type index. */
+  pendingTypeRef: PendingTypeRef[];
+}
+
+export interface PendingResource {
+  fnNodeId: string;
+  moduleQualified: string;
+  type: RelationshipType;
+  target: string;
+  reason: string;
+}
+
+export interface PendingFriend {
+  moduleNodeId: string;
+  friend: string;
+}
+
+export interface PendingTypeRef {
+  fnNodeId: string;
+  moduleQualified: string;
+  target: string;
+  reason: string;
 }
 
 /** Strip generic type arguments: `CoinStore<CoinType>` → `CoinStore`. */
 function stripTypeArgs(typeName: string): string {
   const idx = typeName.indexOf('<');
   return (idx === -1 ? typeName : typeName.slice(0, idx)).trim();
-}
-
-/** Local name of a (possibly already-local) symbol: `0xa::coin::CoinStore` → `CoinStore`. */
-function localName(qualifiedName: string): string {
-  const sep = qualifiedName.lastIndexOf('::');
-  return sep === -1 ? qualifiedName : qualifiedName.slice(sep + 2);
 }
 
 /** Defensive: move-flow omits optional array fields for some symbols. */
@@ -100,14 +122,9 @@ export function mapFactsToGraph(
   };
 
   // Deferred work that needs the full struct/module index (pass B).
-  const pendingResource: Array<{
-    fnNodeId: string;
-    moduleQualified: string;
-    type: RelationshipType;
-    target: string;
-    qualified: boolean;
-  }> = [];
-  const pendingFriends: Array<{ moduleNodeId: string; friend: string }> = [];
+  const pendingResource: PendingResource[] = [];
+  const pendingFriends: PendingFriend[] = [];
+  const pendingTypeRef: PendingTypeRef[] = [];
 
   // ── Pass A: nodes (modules, functions, types, constants) ─────────────────
   for (const [moduleQualified, mod] of Object.entries(facts)) {
@@ -146,6 +163,20 @@ export function mapFactsToGraph(
       const fnNodeId = moveFunctionNodeId(fnQualified, fnFile);
       functionNodeMap.set(fnQualified, fnNodeId);
       const attrs = attributeNames(fn.attributes);
+      const seenTypeRefs = new Set<string>();
+      const addSignatureTypes = (typeExpr: string | null | undefined, reason: string): void => {
+        if (!typeExpr) return;
+        for (const typeName of extractTypeNames(typeExpr)) {
+          const key = `${reason}\0${typeName}`;
+          if (seenTypeRefs.has(key)) continue;
+          seenTypeRefs.add(key);
+          pendingTypeRef.push({ fnNodeId, moduleQualified, target: typeName, reason });
+        }
+      };
+      for (const p of arr(fn.params)) {
+        addSignatureTypes(p.type, MOVE_EDGE_REASON.fnParamType);
+      }
+      addSignatureTypes(fn.returnType, MOVE_EDGE_REASON.fnReturnType);
       nodes.push({
         id: fnNodeId,
         label: 'Function',
@@ -164,12 +195,11 @@ export function mapFactsToGraph(
           isInline: fn.isInline,
           isNative: fn.isNative,
           isInitModule: fn.name === 'init_module',
-          isTest: attrs.includes(MOVE_ATTR.TEST),
-          isTestOnly: attrs.includes(MOVE_ATTR.TEST_ONLY),
           hasSpec: fn.hasSpec,
           attributes: attrs,
           typeParamsJson: typeParamsJson(fn.typeParams),
           acquires: arr(fn.acquiresInferred),
+          usedTypes: [],
           returnType: fn.returnType ?? undefined,
           parameterCount: arr(fn.params).length,
           locationFidelity: fn.file ? 'precise' : 'package',
@@ -183,7 +213,7 @@ export function mapFactsToGraph(
           moduleQualified,
           type: 'READS_RESOURCE',
           target: stripTypeArgs(r),
-          qualified: false,
+          reason: MOVE_EDGE_REASON.readsResource,
         });
       }
       for (const w of arr(fn.resourceAccess?.writes)) {
@@ -192,7 +222,7 @@ export function mapFactsToGraph(
           moduleQualified,
           type: 'WRITES_RESOURCE',
           target: stripTypeArgs(w),
-          qualified: false,
+          reason: MOVE_EDGE_REASON.writesResource,
         });
       }
       for (const a of arr(fn.acquiresInferred)) {
@@ -201,13 +231,13 @@ export function mapFactsToGraph(
           moduleQualified,
           type: 'ACQUIRES',
           target: a,
-          qualified: true,
+          reason: MOVE_EDGE_REASON.acquires,
         });
       }
     }
 
     // Types (structs + enums)
-    for (const ty of arr(mod.types)) {
+    for (const ty of arr(mod.structs)) {
       const tyQualified = `${moduleQualified}::${ty.name}`;
       const tyFile = moveRepoRelativePath(ty.file ?? moduleFileAbs, repoPath);
       const attrs = attributeNames(ty.attributes);
@@ -229,7 +259,6 @@ export function mapFactsToGraph(
             abilities: arr(ty.abilities),
             isResource: arr(ty.abilities).includes(MOVE_ABILITY.KEY),
             isEvent: attrs.includes(MOVE_ATTR.EVENT),
-            isTestOnly: attrs.includes(MOVE_ATTR.TEST_ONLY),
             hasSpec: ty.hasSpec,
             attributes: attrs,
             typeParamsJson: typeParamsJson(ty.typeParams),
@@ -261,6 +290,8 @@ export function mapFactsToGraph(
             startLine: ty.span?.[0],
             endLine: ty.span?.[1],
             abilities: arr(ty.abilities),
+            isResource: arr(ty.abilities).includes(MOVE_ABILITY.KEY),
+            isEvent: attrs.includes(MOVE_ATTR.EVENT),
             hasSpec: ty.hasSpec,
             attributes: attrs,
             typeParamsJson: typeParamsJson(ty.typeParams),
@@ -290,7 +321,7 @@ export function mapFactsToGraph(
                 })),
               ),
               attributes: attributeNames(variant.attributes),
-              locationFidelity: ty.file ? 'precise' : 'package',
+              locationFidelity: ty.file ? 'module' : 'package',
             },
           });
           edge(eId, vId, 'CONTAINS', 1.0, MOVE_EDGE_REASON.containsVariant);
@@ -314,56 +345,149 @@ export function mapFactsToGraph(
           constType: c.type,
           constValue: c.value,
           isErrorCode: ERROR_CODE_PATTERN.test(c.name),
-          locationFidelity: mod.file ? 'precise' : 'package',
+          locationFidelity: mod.file ? 'module' : 'package',
         },
       });
       edge(moduleNodeId, cNodeId, 'DEFINES', 1.0, MOVE_EDGE_REASON.definesConst);
     }
   }
 
-  // ── Pass B: resolve resource + friend edges against the full index ───────
-  // Prebuild a local-name → node-id[] index once, so resolveStruct is O(1)
-  // instead of scanning structNodeMap per pending edge (etna-scale hotspot).
+  return {
+    nodes,
+    edges,
+    moduleFileMap,
+    functionNodeMap,
+    structNodeMap,
+    pendingResource,
+    pendingFriends,
+    pendingTypeRef,
+  };
+}
+
+export function buildLocalNameIndex(structNodeMap: ReadonlyMap<string, string>): Map<string, string[]> {
   const structIdsByLocalName = new Map<string, string[]>();
   for (const [qn, id] of structNodeMap) {
-    const local = localName(qn);
-    const list = structIdsByLocalName.get(local);
+    const key = moveLocalName(qn);
+    const list = structIdsByLocalName.get(key);
     if (list) list.push(id);
-    else structIdsByLocalName.set(local, [id]);
+    else structIdsByLocalName.set(key, [id]);
   }
-  const resolveStruct = (localOrQualified: string, callerModule: string): string | undefined => {
-    // Fully-qualified hit (e.g. acquiresInferred values).
-    const exact = structNodeMap.get(localOrQualified);
-    if (exact) return exact;
-    const base = stripTypeArgs(localOrQualified);
-    // Same-module preference.
-    const sameModule = structNodeMap.get(`${callerModule}::${base}`);
-    if (sameModule) return sameModule;
-    // Unique local-name match across the package.
-    const matches = structIdsByLocalName.get(localName(base)) ?? [];
-    return matches.length === 1 ? matches[0] : undefined;
-  };
+  return structIdsByLocalName;
+}
 
+function resolveStructRef(
+  localOrQualified: string,
+  callerModule: string,
+  structNodeMap: ReadonlyMap<string, string>,
+  structIdsByLocalName: ReadonlyMap<string, readonly string[]>,
+): { targetId: string } | { unresolved: true } | { ambiguous: true } {
+  const exact = structNodeMap.get(localOrQualified);
+  if (exact) return { targetId: exact };
+
+  const base = stripTypeArgs(localOrQualified);
+  const sameModule = structNodeMap.get(`${callerModule}::${base}`);
+  if (sameModule) return { targetId: sameModule };
+
+  const matches = structIdsByLocalName.get(moveLocalName(base)) ?? [];
+  if (matches.length === 1) return { targetId: matches[0] };
+  return matches.length > 1 ? { ambiguous: true } : { unresolved: true };
+}
+
+export function resolveResourceEdges(
+  pendingResource: readonly PendingResource[],
+  structNodeMap: ReadonlyMap<string, string>,
+  structIdsByLocalName: ReadonlyMap<string, readonly string[]>,
+  edgeSink: (rel: GraphRelationship) => void,
+  onUnresolved?: (pending: PendingResource) => void,
+  onAmbiguous?: (pending: PendingResource) => void,
+): void {
   const seenResourceEdges = new Set<string>();
   for (const pr of pendingResource) {
-    const targetId = resolveStruct(pr.target, pr.moduleQualified);
-    if (!targetId) continue; // resource in a dependency / unresolved — skip dangling edge
-    // Dedupe: `CoinStore<A>` and `CoinStore<B>` (or read+acquire of one struct)
-    // collapse to the same edge.
-    const key = `${pr.fnNodeId}\0${pr.type}\0${targetId}`;
+    const resolved = resolveStructRef(
+      pr.target,
+      pr.moduleQualified,
+      structNodeMap,
+      structIdsByLocalName,
+    );
+    if ('unresolved' in resolved) {
+      onUnresolved?.(pr);
+      continue;
+    }
+    if ('ambiguous' in resolved) {
+      onAmbiguous?.(pr);
+      continue;
+    }
+
+    const key = `${pr.fnNodeId}\0${pr.type}\0${resolved.targetId}`;
     if (seenResourceEdges.has(key)) continue;
     seenResourceEdges.add(key);
-    edge(pr.fnNodeId, targetId, pr.type, 1.0, `move-${pr.type.toLowerCase()}`);
+    edgeSink({
+      id: `rel:${randomUUID()}`,
+      sourceId: pr.fnNodeId,
+      targetId: resolved.targetId,
+      type: pr.type,
+      confidence: 1.0,
+      reason: pr.reason,
+    });
   }
+}
 
+export function resolveFriendEdges(
+  pendingFriends: readonly PendingFriend[],
+  moduleFileMap: ReadonlyMap<string, string>,
+  edgeSink: (rel: GraphRelationship) => void,
+): void {
   for (const pf of pendingFriends) {
     const friendFile = moduleFileMap.get(pf.friend);
-    if (!friendFile) continue; // cross-package friend — target node not in this graph slice
-    const friendNodeId = moveModuleNodeId(pf.friend, friendFile);
-    edge(pf.moduleNodeId, friendNodeId, 'FRIEND_OF', 1.0, MOVE_EDGE_REASON.friend);
+    if (!friendFile) continue;
+    edgeSink({
+      id: `rel:${randomUUID()}`,
+      sourceId: pf.moduleNodeId,
+      targetId: moveModuleNodeId(pf.friend, friendFile),
+      type: 'FRIEND_OF',
+      confidence: 1.0,
+      reason: MOVE_EDGE_REASON.friend,
+    });
   }
+}
 
-  return { nodes, edges, moduleFileMap, functionNodeMap, structNodeMap };
+export function resolveTypeRefEdges(
+  pendingTypeRef: readonly PendingTypeRef[],
+  structNodeMap: ReadonlyMap<string, string>,
+  structIdsByLocalName: ReadonlyMap<string, readonly string[]>,
+  edgeSink: (rel: GraphRelationship) => void,
+  onUnresolved?: (pending: PendingTypeRef) => void,
+  onAmbiguous?: (pending: PendingTypeRef) => void,
+): void {
+  const seenTypeEdges = new Set<string>();
+  for (const pr of pendingTypeRef) {
+    const resolved = resolveStructRef(
+      pr.target,
+      pr.moduleQualified,
+      structNodeMap,
+      structIdsByLocalName,
+    );
+    if ('unresolved' in resolved) {
+      onUnresolved?.(pr);
+      continue;
+    }
+    if ('ambiguous' in resolved) {
+      onAmbiguous?.(pr);
+      continue;
+    }
+
+    const key = `${pr.fnNodeId}\0${pr.reason}\0${resolved.targetId}`;
+    if (seenTypeEdges.has(key)) continue;
+    seenTypeEdges.add(key);
+    edgeSink({
+      id: `rel:${randomUUID()}`,
+      sourceId: pr.fnNodeId,
+      targetId: resolved.targetId,
+      type: 'USES_TYPE',
+      confidence: 1.0,
+      reason: pr.reason,
+    });
+  }
 }
 
 // Re-export for callers that prefer the label type.

@@ -129,6 +129,11 @@ export const VALID_RELATION_TYPES = new Set([
   'HANDLES_TOOL',
   'ENTRY_POINT_OF',
   'WRAPS',
+  'USES',
+  'ACQUIRES',
+  'READS_RESOURCE',
+  'WRITES_RESOURCE',
+  'USES_TYPE',
 ]);
 
 /**
@@ -2882,8 +2887,6 @@ export class LocalBackend {
       module?: string;
       kind?: 'entry' | 'view' | 'init_module' | 'inline' | 'native';
       attribute?: string;
-      hasSpec?: boolean;
-      includeTestOnly?: boolean;
     },
   ): Promise<any> {
     await this.ensureInitialized(repo);
@@ -2910,10 +2913,6 @@ export class LocalBackend {
       default:
         clauses.push('(f.isEntry = true OR f.isView = true OR f.isInitModule = true)');
     }
-    if (params?.includeTestOnly !== true) {
-      clauses.push('(f.isTestOnly IS NULL OR f.isTestOnly = false)');
-    }
-    if (params?.hasSpec === true) clauses.push('f.hasSpec = true');
     const qp: Record<string, unknown> = {};
     if (typeof params?.module === 'string' && params.module) {
       clauses.push('f.moduleQualifiedName = $module');
@@ -2924,7 +2923,7 @@ export class LocalBackend {
       `RETURN f.name AS name, f.qualifiedName AS qualifiedName, f.filePath AS filePath, ` +
       `f.isEntry AS isEntry, f.isView AS isView, f.isInitModule AS isInitModule, ` +
       `f.isInline AS isInline, f.isNative AS isNative, f.visibility AS visibility, ` +
-      `f.hasSpec AS hasSpec, f.acquires AS acquires, f.attributes AS attributes, ` +
+      `f.acquires AS acquires, f.attributes AS attributes, ` +
       `f.returnType AS returnType ORDER BY f.filePath, f.name`;
     const rows = await executeParameterized(repo.lbugPath, query, qp);
     if (!Array.isArray(rows)) return rows;
@@ -2951,7 +2950,7 @@ export class LocalBackend {
       qp.module = params.module;
     }
     const query =
-      "MATCH (s:Struct) WHERE s.language = 'move' AND s.isResource = true" +
+      "MATCH (s) WHERE (s:Struct OR s:Enum) AND s.language = 'move' AND s.isResource = true" +
       moduleFilter +
       ' OPTIONAL MATCH (f:Function)-[r:CodeRelation]->(s) ' +
       "WHERE r.type = 'READS_RESOURCE' OR r.type = 'WRITES_RESOURCE' OR r.type = 'ACQUIRES' " +
@@ -2980,7 +2979,7 @@ export class LocalBackend {
       target: params.target,
       direction: params.direction ?? 'upstream',
       maxDepth: params.maxDepth,
-      relationTypes: ['CALLS', 'READS_RESOURCE', 'WRITES_RESOURCE', 'ACQUIRES'],
+      relationTypes: ['CALLS', 'READS_RESOURCE', 'WRITES_RESOURCE', 'ACQUIRES', 'USES_TYPE'],
     } as ImpactParams);
   }
 

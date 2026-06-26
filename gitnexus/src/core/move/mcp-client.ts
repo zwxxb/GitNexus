@@ -8,7 +8,10 @@
 
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { MoveFactsMap, ModuleSummaryMap, CallGraphMap } from './compiler-facts.js';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import * as path from 'node:path';
+import type { MoveFactsMap, CallGraphMap } from './compiler-facts.js';
 
 interface JsonRpcResponse {
   jsonrpc: '2.0';
@@ -25,8 +28,6 @@ interface JsonRpcResponse {
 export interface MoveFlowClient {
   /** Full-fidelity per-module facts (move_package_query query:"facts"). */
   facts(packagePath: string): Promise<MoveFactsMap>;
-  /** Degraded fallback: per-module constants/structs/function-signatures. */
-  moduleSummary(packagePath: string): Promise<ModuleSummaryMap>;
   /** Function-level call graph (caller qualified name → callee qualified names). */
   callGraph(packagePath: string): Promise<CallGraphMap>;
   /** Capability probe (cached): which queries this move-flow build supports. */
@@ -38,8 +39,6 @@ export interface MoveFlowClient {
 export interface MoveFlowCapabilities {
   /** `facts` query available (rich, compiler-sourced per-module facts). */
   hasFactsQuery: boolean;
-  /** `module_summary` query available (the signature-parse fallback path). */
-  hasModuleSummary: boolean;
 }
 
 /** Minimal shape of an entry in an MCP `tools/list` response. */
@@ -71,10 +70,9 @@ export function detectMoveFlowCapabilities(
       if (t.name === 'move_package_query') querySchema = t.inputSchema;
     }
   }
-  const hasModuleSummary = names.has('move_package_query');
   const hasFactsQuery =
     names.has('move_package_facts') || schemaMentionsFactsQuery(querySchema);
-  return { hasFactsQuery, hasModuleSummary };
+  return { hasFactsQuery };
 }
 
 /** True if the `move_package_query` inputSchema declares a `"facts"` query const. */
@@ -99,7 +97,10 @@ function schemaMentionsFactsQuery(schema: unknown): boolean {
 export class MoveFlowMcpClient implements MoveFlowClient {
   private proc: ChildProcess | null = null;
   private requestId = 0;
-  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  private pending = new Map<
+    number,
+    { resolve: (v: any) => void; reject: (e: Error) => void; timeout: ReturnType<typeof setTimeout> }
+  >();
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private capsPromise: Promise<MoveFlowCapabilities> | null = null;
@@ -156,8 +157,9 @@ export class MoveFlowMcpClient implements MoveFlowClient {
           );
           return;
         }
-        // Post-init unexpected death: reject all pending requests
+        // Post-init unexpected death: settle all in-flight requests
         for (const [, p] of this.pending) {
+          clearTimeout(p.timeout);
           p.reject(
             new Error(`move-flow exited unexpectedly (code ${code})${this.stderrContext()}`),
           );
@@ -202,6 +204,7 @@ export class MoveFlowMcpClient implements MoveFlowClient {
           clearTimeout(timeout);
           reject(err);
         },
+        timeout,
       });
 
       this.send({
@@ -253,6 +256,7 @@ export class MoveFlowMcpClient implements MoveFlowClient {
           clearTimeout(timeout);
           reject(err);
         },
+        timeout,
       });
 
       this.send({
@@ -262,13 +266,6 @@ export class MoveFlowMcpClient implements MoveFlowClient {
         params: { name: toolName, arguments: args },
       });
     });
-  }
-
-  async moduleSummary(packagePath: string): Promise<ModuleSummaryMap> {
-    return (await this.callTool('move_package_query', {
-      package_path: packagePath,
-      query: 'module_summary',
-    })) as ModuleSummaryMap;
   }
 
   async callGraph(packagePath: string): Promise<CallGraphMap> {
@@ -303,6 +300,7 @@ export class MoveFlowMcpClient implements MoveFlowClient {
           clearTimeout(timeout);
           reject(err);
         },
+        timeout,
       });
       this.send({ jsonrpc: '2.0', id, method, params });
     });
@@ -316,14 +314,20 @@ export class MoveFlowMcpClient implements MoveFlowClient {
         const tools = (listed?.tools ?? []) as MoveFlowToolInfo[];
         return detectMoveFlowCapabilities(tools);
       } catch {
-        // If the probe fails, assume the conservative fallback path only.
-        return { hasFactsQuery: false, hasModuleSummary: true };
+        // Probe failure → facts unavailable; the ingest phase trips its hard gate.
+        return { hasFactsQuery: false };
       }
     })();
     return this.capsPromise;
   }
 
   async shutdown(): Promise<void> {
+    const shutdownError = new Error('move-flow client shutdown');
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timeout);
+      p.reject(shutdownError);
+    }
+    this.pending.clear();
     if (this.proc) {
       this.proc.stdin?.end();
       this.proc.kill();
@@ -332,7 +336,6 @@ export class MoveFlowMcpClient implements MoveFlowClient {
     this.initialized = false;
     this.initPromise = null;
     this.capsPromise = null;
-    this.pending.clear();
     this.stderrLines.length = 0;
   }
 }
@@ -340,16 +343,51 @@ export class MoveFlowMcpClient implements MoveFlowClient {
 /**
  * Try to create a MoveFlowMcpClient. Returns null if move-flow binary
  * is not found on the system.
+ *
+ * Resolution order:
+ *   1. `$MOVE_FLOW` (explicit override for power users / CI).
+ *   2. Bundled `vendor/move-flow/<platform>/move-flow[.exe]` (the postinstall
+ *      probe installs here — see `scripts/install-move-flow.cjs`).
+ *   3. `move-flow` on `$PATH` (host install).
  */
 const SAFE_BINARY = /^[\w./-]+$/;
 
-export function tryCreateMoveFlowClient(): MoveFlowMcpClient | null {
-  const binary = process.env.MOVE_FLOW || 'move-flow';
-  if (!SAFE_BINARY.test(binary)) return null;
+function bundledMoveFlowPath(): string | null {
+  const { platform, arch } = process;
+  let key: string | null = null;
+  if (platform === 'linux' && arch === 'x64') key = 'linux-x64';
+  else if (platform === 'linux' && arch === 'arm64') key = 'linux-arm64';
+  else if (platform === 'darwin' && arch === 'arm64') key = 'darwin-arm64';
+  else if (platform === 'darwin' && arch === 'x64') key = 'darwin-x64';
+  else if (platform === 'win32' && arch === 'x64') key = 'win32-x64';
+  if (!key) return null;
+  const name = platform === 'win32' ? 'move-flow.exe' : 'move-flow';
+  // mcp-client.ts lives at gitnexus/src/core/move/; vendor/ is two levels above src/.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, '..', '..', '..', 'vendor', 'move-flow', key, name);
+}
+
+function probeBinary(binary: string): boolean {
   try {
-    execFileSync('/usr/bin/env', [binary, '--version'], { stdio: 'ignore', timeout: 5000 });
-    return new MoveFlowMcpClient(binary);
+    execFileSync(binary, ['--version'], { stdio: 'ignore', timeout: 5000 });
+    return true;
   } catch {
-    return null;
+    return false;
   }
+}
+
+export function tryCreateMoveFlowClient(): MoveFlowMcpClient | null {
+  const explicit = process.env.MOVE_FLOW;
+  if (explicit) {
+    if (!SAFE_BINARY.test(explicit)) return null;
+    return probeBinary(explicit) ? new MoveFlowMcpClient(explicit) : null;
+  }
+
+  const bundled = bundledMoveFlowPath();
+  if (bundled && existsSync(bundled) && SAFE_BINARY.test(bundled) && probeBinary(bundled)) {
+    return new MoveFlowMcpClient(bundled);
+  }
+
+  const onPath = 'move-flow';
+  return probeBinary(onPath) ? new MoveFlowMcpClient(onPath) : null;
 }

@@ -5,30 +5,18 @@
  * with no compile error, so they live here.
  */
 
-import type { RelationshipType } from 'gitnexus-shared';
-
 /** `NodeProperties.language` tag for every Move symbol. */
 export const MOVE_LANGUAGE = 'move';
 
 /** Parsed Move attribute names of interest. */
 export const MOVE_ATTR = {
   EVENT: 'event',
-  VIEW: 'view',
-  TEST: 'test',
-  TEST_ONLY: 'test_only',
 } as const;
 
 /** Move struct abilities of interest. */
 export const MOVE_ABILITY = {
   KEY: 'key',
 } as const;
-
-/** Resource-access edge types (function → resource struct). */
-export const MOVE_RESOURCE_EDGE_TYPES: readonly RelationshipType[] = [
-  'ACQUIRES',
-  'READS_RESOURCE',
-  'WRITES_RESOURCE',
-];
 
 /**
  * `reason` strings for Move graph edges.
@@ -51,6 +39,16 @@ export const MOVE_EDGE_REASON = {
   calls: 'move-compiler-call-graph',
   crossModuleDependency: 'move-cross-module-dependency',
   moduleInFile: 'move-module-in-file',
+  // Resource-access edges (function → resource struct)
+  readsResource: 'move-reads_resource',
+  writesResource: 'move-writes_resource',
+  acquires: 'move-acquires',
+  fnParamType: 'move-fn-param-type',
+  fnReturnType: 'move-fn-return-type',
+  // Entry-point edge reasons (also set as funcNode.properties.entryPointReason)
+  entryFunction: 'move-entry-function',
+  viewFunction: 'move-view-function',
+  initModule: 'move-init-module',
 } as const;
 
 /** Error-code constant naming convention (e.g. `E_NOT_REGISTERED`). */

@@ -129,10 +129,10 @@ export type NodeProperties = {
   fields?: Array<{ name: string; type: string; positional?: boolean }>;
   /**
    * Node-location precision. `'precise'` = per-symbol file/span from the
-   * move-flow `facts` query; `'package'` = coarse package-root fallback when
-   * only `module_summary` is available (no per-symbol locations).
+   * move-flow `facts` query; `'module'` = only the containing module/type file
+   * is known; `'package'` = coarse package-root fallback.
    */
-  locationFidelity?: 'precise' | 'package';
+  locationFidelity?: 'precise' | 'module' | 'package';
   // Extensible
   [key: string]: unknown;
 };
@@ -177,6 +177,8 @@ export type RelationshipType =
   | 'WRITES_RESOURCE'
   /** Function acquires a resource (`facts.acquiresInferred`). */
   | 'ACQUIRES'
+  /** Function signature mentions a Move struct/enum type. */
+  | 'USES_TYPE'
   /** Reserved: function emits an event struct (not yet sourced from facts). */
   | 'EMITS'
   | 'BINDS_EVENT_HANDLER'

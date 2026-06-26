@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { mapFactsToGraph } from '../../../src/core/move/facts-mapper.js';
 import {
-  moduleSummaryToFacts,
-  type MoveFactsMap,
-  type ModuleSummaryMap,
-} from '../../../src/core/move/compiler-facts.js';
+  buildLocalNameIndex,
+  mapFactsToGraph,
+  resolveFriendEdges,
+  resolveResourceEdges,
+  resolveTypeRefEdges,
+} from '../../../src/core/move/facts-mapper.js';
+import { type MoveFactsMap } from '../../../src/core/move/compiler-facts.js';
 
 // Trimmed-but-faithful slice of a real `move_package_query { query: "facts" }`
 // response for the `coin` fixture (coin + coin_admin modules).
@@ -29,7 +31,6 @@ const facts: MoveFactsMap = {
         typeParams: [{ name: 'CoinType', abilities: [], isPhantom: false }],
         params: [{ name: 'account', type: '&signer' }],
         returnType: null,
-        declaredAccess: [],
         acquiresInferred: [],
         resourceAccess: { reads: [], writes: ['CoinStore<CoinType>'] },
         hasSpec: false,
@@ -47,13 +48,12 @@ const facts: MoveFactsMap = {
         typeParams: [{ name: 'CoinType', abilities: [], isPhantom: false }],
         params: [{ name: 'addr', type: 'address' }],
         returnType: 'u64',
-        declaredAccess: [],
         acquiresInferred: ['0xa::coin::CoinStore'],
         resourceAccess: { reads: ['CoinStore<CoinType>'], writes: [] },
         hasSpec: false,
       },
     ],
-    types: [
+    structs: [
       {
         kind: 'struct',
         name: 'CoinStore',
@@ -86,14 +86,45 @@ const facts: MoveFactsMap = {
     attributes: [],
     hasSpecs: false,
     functions: [],
-    types: [],
+    structs: [],
     constants: [],
   },
 };
 
+function mapFactsToGraphWithResolvedEdges(factsMap: MoveFactsMap): ReturnType<typeof mapFactsToGraph> {
+  const mapped = mapFactsToGraph(factsMap, '/pkg');
+  const edges = [...mapped.edges];
+  const localNameIndex = buildLocalNameIndex(mapped.structNodeMap);
+  const addResolvedUsedType = (sourceId: string, targetId: string): void => {
+    const fnNode = mapped.nodes.find((n) => n.id === sourceId);
+    const typeNode = mapped.nodes.find((n) => n.id === targetId);
+    const qualifiedName = typeNode?.properties.qualifiedName;
+    if (!fnNode || typeof qualifiedName !== 'string') return;
+    const current = Array.isArray(fnNode.properties.usedTypes) ? fnNode.properties.usedTypes : [];
+    if (!current.includes(qualifiedName)) fnNode.properties.usedTypes = [...current, qualifiedName];
+  };
+  resolveResourceEdges(
+    mapped.pendingResource,
+    mapped.structNodeMap,
+    localNameIndex,
+    (rel) => edges.push(rel),
+  );
+  resolveFriendEdges(mapped.pendingFriends, mapped.moduleFileMap, (rel) => edges.push(rel));
+  resolveTypeRefEdges(
+    mapped.pendingTypeRef,
+    mapped.structNodeMap,
+    localNameIndex,
+    (rel) => {
+      edges.push(rel);
+      addResolvedUsedType(rel.sourceId, rel.targetId);
+    },
+  );
+  return { ...mapped, edges };
+}
+
 describe('mapFactsToGraph', () => {
   it('emits a WRITES_RESOURCE edge from register to CoinStore', () => {
-    const { edges } = mapFactsToGraph(facts, '/pkg');
+    const { edges } = mapFactsToGraphWithResolvedEdges(facts);
     expect(
       edges.some(
         (e) =>
@@ -105,7 +136,7 @@ describe('mapFactsToGraph', () => {
   });
 
   it('emits a READS_RESOURCE edge from balance_of to CoinStore', () => {
-    const { edges } = mapFactsToGraph(facts, '/pkg');
+    const { edges } = mapFactsToGraphWithResolvedEdges(facts);
     expect(
       edges.some(
         (e) =>
@@ -117,12 +148,12 @@ describe('mapFactsToGraph', () => {
   });
 
   it('emits an ACQUIRES edge from the fully-qualified acquiresInferred name', () => {
-    const { edges } = mapFactsToGraph(facts, '/pkg');
+    const { edges } = mapFactsToGraphWithResolvedEdges(facts);
     expect(edges.some((e) => e.type === 'ACQUIRES' && e.sourceId.includes('balance_of'))).toBe(true);
   });
 
   it('emits a FRIEND_OF edge to coin_admin', () => {
-    const { edges } = mapFactsToGraph(facts, '/pkg');
+    const { edges } = mapFactsToGraphWithResolvedEdges(facts);
     expect(edges.some((e) => e.type === 'FRIEND_OF' && e.targetId.includes('coin_admin'))).toBe(
       true,
     );
@@ -171,33 +202,13 @@ describe('mapFactsToGraph', () => {
           },
         ],
       },
-    } as unknown as MoveFactsMap;
+    };
     expect(() => mapFactsToGraph(sparse, '/pkg')).not.toThrow();
     const { nodes } = mapFactsToGraph(sparse, '/pkg');
     const fn = nodes.find((n) => n.properties.name === 'do_thing');
     expect(fn?.properties.isEntry).toBe(true);
     expect(fn?.properties.parameterCount).toBe(0);
     expect(fn?.properties.acquires).toEqual([]);
-  });
-
-  it('fallback: moduleSummaryToFacts feeds the same mapper (degraded, package-fidelity)', () => {
-    const summary: ModuleSummaryMap = {
-      '0xa::coin': {
-        constants: [{ name: 'E_NOT_REGISTERED', type: 'u64', value: '1' }],
-        structs: [{ name: 'CoinStore', abilities: ['key'], fields: ['balance: u64'] }],
-        functions: [{ name: 'register', signature: 'public entry fun register<CoinType>(account: &signer)' }],
-      },
-    };
-    const { nodes } = mapFactsToGraph(moduleSummaryToFacts(summary), '/pkg', '/pkg');
-    const fn = nodes.find((n) => n.properties.name === 'register');
-    expect(fn?.label).toBe('Function');
-    expect(fn?.properties.isEntry).toBe(true);
-    expect(fn?.properties.locationFidelity).toBe('package'); // module_summary has no per-symbol file
-    const cs = nodes.find((n) => n.properties.name === 'CoinStore');
-    expect(cs?.properties.isResource).toBe(true); // key ability survives the adapter
-    expect(nodes.some((n) => n.label === 'Const' && n.properties.name === 'E_NOT_REGISTERED')).toBe(
-      true,
-    );
   });
 
   it('emits Module/Function/Struct/Const nodes and DEFINES edges', () => {
@@ -216,7 +227,7 @@ describe('mapFactsToGraph', () => {
   });
 
   it('uses the move-friend-or-package reason on FRIEND_OF edges (compiler-derived friends include package-visibility)', () => {
-    const { edges } = mapFactsToGraph(facts, '/pkg');
+    const { edges } = mapFactsToGraphWithResolvedEdges(facts);
     const friendEdge = edges.find((e) => e.type === 'FRIEND_OF');
     expect(friendEdge?.reason).toBe('move-friend-or-package');
   });
@@ -237,7 +248,7 @@ describe('mapFactsToGraph', () => {
         friends: [],
         attributes: [],
         functions: [],
-        types: [
+        structs: [
           {
             kind: 'enum',
             name: 'OrderState',
@@ -251,13 +262,40 @@ describe('mapFactsToGraph', () => {
         ],
         constants: [],
       },
-    } as unknown as MoveFactsMap;
+    };
     const { nodes } = mapFactsToGraph(enumFacts, '/pkg');
     const en = nodes.find((n) => n.label === 'Enum');
     expect(en?.properties.typeParamsJson).toBe(
       JSON.stringify([{ name: 'T', constraints: ['copy'], isPhantom: false }]),
     );
     expect(en?.properties.typeParams).toBeUndefined();
+  });
+
+  it('marks key enums as resources', () => {
+    const enumFacts: MoveFactsMap = {
+      '0xa::accounts': {
+        file: '/pkg/sources/accounts.move',
+        friends: [],
+        attributes: [],
+        functions: [],
+        structs: [
+          {
+            kind: 'enum',
+            name: 'GlobalAccountStates',
+            file: '/pkg/sources/accounts.move',
+            span: [1, 5],
+            abilities: ['key'],
+            typeParams: [],
+            variants: [{ name: 'Empty', kind: 'unit', fields: [], attributes: [] }],
+            attributes: [],
+          },
+        ],
+        constants: [],
+      },
+    };
+    const { nodes } = mapFactsToGraph(enumFacts, '/pkg');
+    const en = nodes.find((n) => n.label === 'Enum' && n.properties.name === 'GlobalAccountStates');
+    expect(en?.properties.isResource).toBe(true);
   });
 
   it('exposes EnumVariant attributes on the node', () => {
@@ -267,7 +305,7 @@ describe('mapFactsToGraph', () => {
         friends: [],
         attributes: [],
         functions: [],
-        types: [
+        structs: [
           {
             kind: 'enum',
             name: 'OrderState',
@@ -288,10 +326,11 @@ describe('mapFactsToGraph', () => {
         ],
         constants: [],
       },
-    } as unknown as MoveFactsMap;
+    };
     const { nodes } = mapFactsToGraph(enumFacts, '/pkg');
     const v = nodes.find((n) => n.label === 'EnumVariant');
     expect(v?.properties.attributes).toEqual(['deprecated']);
+    expect(v?.properties.locationFidelity).toBe('module');
   });
 
   it('does not write moduleAddress on Function nodes (only Module/Struct/Enum carry it)', () => {
@@ -311,5 +350,138 @@ describe('mapFactsToGraph', () => {
     expect(c?.properties.constValue).toBe('1');
     expect(c?.properties.declaredType).toBeUndefined();
     expect(c?.properties.value).toBeUndefined();
+    expect(c?.properties.locationFidelity).toBe('module');
+  });
+
+  it('emits USES_TYPE edges from function signature types (params + return)', () => {
+    const sigFacts: MoveFactsMap = {
+      '0xa::coin': {
+        file: '/pkg/sources/coin.move',
+        friends: [],
+        attributes: [],
+        functions: [
+          {
+            name: 'wrap',
+            file: '/pkg/sources/coin.move',
+            span: [1, 5],
+            visibility: 'public',
+            isEntry: false,
+            isInline: false,
+            isNative: false,
+            isView: false,
+            attributes: [],
+            typeParams: [],
+            params: [{ name: 'store', type: '&CoinStore' }],
+            returnType: 'TransferEvent',
+            acquiresInferred: [],
+            resourceAccess: { reads: [], writes: [] },
+          },
+        ],
+        structs: [
+          {
+            kind: 'struct',
+            name: 'CoinStore',
+            file: '/pkg/sources/coin.move',
+            span: [10, 12],
+            abilities: ['key'],
+            typeParams: [],
+            fields: [],
+            attributes: [],
+          },
+          {
+            kind: 'struct',
+            name: 'TransferEvent',
+            file: '/pkg/sources/coin.move',
+            span: [20, 22],
+            abilities: ['drop'],
+            typeParams: [],
+            fields: [],
+            attributes: [],
+          },
+        ],
+        constants: [],
+      },
+    };
+    const { edges } = mapFactsToGraphWithResolvedEdges(sigFacts);
+    const usesEdges = edges.filter((e) => e.type === 'USES_TYPE');
+    const toCoinStore = usesEdges.find((e) => e.targetId.includes('CoinStore'));
+    const toEvent = usesEdges.find((e) => e.targetId.includes('TransferEvent'));
+    expect(toCoinStore?.reason).toBe('move-fn-param-type');
+    expect(toEvent?.reason).toBe('move-fn-return-type');
+  });
+
+  it('populates usedTypes from resolved signature type edges only', () => {
+    const sigFacts: MoveFactsMap = {
+      '0xa::coin': {
+        file: '/pkg/sources/coin.move',
+        friends: [],
+        attributes: [],
+        functions: [
+          {
+            name: 'wrap',
+            file: '/pkg/sources/coin.move',
+            span: [1, 5],
+            visibility: 'public',
+            isEntry: false,
+            isInline: false,
+            isNative: false,
+            isView: false,
+            attributes: [],
+            typeParams: [],
+            params: [
+              { name: 'stores', type: 'vector<CoinStore<T>>' },
+              { name: 'unknown', type: 'UnresolvedType' },
+            ],
+            returnType: 'TransferEvent',
+            acquiresInferred: [],
+            resourceAccess: { reads: [], writes: [] },
+          },
+        ],
+        structs: [
+          {
+            kind: 'struct',
+            name: 'CoinStore',
+            file: '/pkg/sources/coin.move',
+            span: [10, 12],
+            abilities: ['key'],
+            typeParams: [],
+            fields: [],
+            attributes: [],
+          },
+          {
+            kind: 'struct',
+            name: 'TransferEvent',
+            file: '/pkg/sources/coin.move',
+            span: [20, 22],
+            abilities: ['drop'],
+            typeParams: [],
+            fields: [],
+            attributes: [],
+          },
+        ],
+        constants: [],
+      },
+    };
+    const { nodes } = mapFactsToGraphWithResolvedEdges(sigFacts);
+    const wrap = nodes.find((n) => n.label === 'Function' && n.properties.name === 'wrap');
+    expect(wrap?.properties.usedTypes).toEqual([
+      '0xa::coin::CoinStore',
+      '0xa::coin::TransferEvent',
+    ]);
+  });
+
+  it('populates usedTypes string array on the Function node', () => {
+    const { nodes } = mapFactsToGraph(facts, '/pkg');
+    const balanceOf = nodes.find((n) => n.label === 'Function' && n.properties.name === 'balance_of');
+    expect(balanceOf?.properties.usedTypes).toEqual([]);
+    const register = nodes.find((n) => n.label === 'Function' && n.properties.name === 'register');
+    expect(register?.properties.usedTypes).toEqual([]);
+  });
+
+  it('does not write isTest/isTestOnly on Function nodes (move-flow strips test items)', () => {
+    const { nodes } = mapFactsToGraph(facts, '/pkg');
+    const fn = nodes.find((n) => n.label === 'Function' && n.properties.name === 'balance_of');
+    expect(fn?.properties.isTest).toBeUndefined();
+    expect(fn?.properties.isTestOnly).toBeUndefined();
   });
 });

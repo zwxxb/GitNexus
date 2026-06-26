@@ -9,7 +9,8 @@ export interface MoveConsistencyIssue {
     | 'duplicate-node-id'
     | 'missing-owned-caller'
     | 'missing-owned-callee'
-    | 'malformed-source-evidence';
+    | 'malformed-source-evidence'
+    | 'unresolved-resource-target';
   severity: MoveConsistencySeverity;
   message: string;
   details?: Record<string, unknown>;
@@ -70,6 +71,16 @@ export function validateMoveIngestOutput(
         });
       }
     }
+  }
+
+  const dropped = moveIngest.droppedResourceRefs;
+  if (dropped && dropped.length > 0) {
+    issues.push({
+      code: 'unresolved-resource-target',
+      severity: 'warning',
+      message: `${dropped.length} resource read/write/acquires target(s) could not be resolved.`,
+      details: { count: dropped.length, sample: dropped.slice(0, 5) },
+    });
   }
 
   return issues;
