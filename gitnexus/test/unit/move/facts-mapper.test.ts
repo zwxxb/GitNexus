@@ -214,4 +214,10 @@ describe('mapFactsToGraph', () => {
     expect(structNodeMap.has('0xa::coin::CoinStore')).toBe(true);
     expect(moduleFileMap.get('0xa::coin')).toBe('/pkg/sources/coin.move');
   });
+
+  it('uses the move-friend-or-package reason on FRIEND_OF edges (compiler-derived friends include package-visibility)', () => {
+    const { edges } = mapFactsToGraph(facts, '/pkg');
+    const friendEdge = edges.find((e) => e.type === 'FRIEND_OF');
+    expect(friendEdge?.reason).toBe('move-friend-or-package');
+  });
 });

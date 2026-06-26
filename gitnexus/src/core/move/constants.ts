@@ -30,14 +30,24 @@ export const MOVE_RESOURCE_EDGE_TYPES: readonly RelationshipType[] = [
   'WRITES_RESOURCE',
 ];
 
-/** `reason` strings for Move graph edges. */
+/**
+ * `reason` strings for Move graph edges.
+ *
+ * Note on `friend`: move-flow's `friends` array on a module is a *compiler-
+ * derived* set that conflates two source-level concepts: explicit
+ * `friend X::Y;` declarations and the Move-2 cross-module visibility that
+ * `package fun` (and friend-restricted `public(friend)`) implicitly grants.
+ * The facts payload does not preserve which of the two produced each entry,
+ * so the `move-friend-or-package` reason is intentionally ambiguous; a
+ * downstream filter (e.g. re-parsing source) is needed to distinguish them.
+ */
 export const MOVE_EDGE_REASON = {
   definesFunction: 'move-module-defines-function',
   definesStruct: 'move-module-defines-struct',
   definesEnum: 'move-module-defines-enum',
   definesConst: 'move-module-defines-const',
   containsVariant: 'move-enum-contains-variant',
-  friend: 'move-friend-declaration',
+  friend: 'move-friend-or-package',
   calls: 'move-compiler-call-graph',
   crossModuleDependency: 'move-cross-module-dependency',
   moduleInFile: 'move-module-in-file',
