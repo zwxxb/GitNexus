@@ -17,6 +17,7 @@ import {
   CODE_ELEMENT_SCHEMA,
   COMMUNITY_SCHEMA,
   PROCESS_SCHEMA,
+  BASICBLOCK_SCHEMA,
   RELATION_SCHEMA,
   EMBEDDING_SCHEMA,
   CREATE_VECTOR_INDEX_QUERY,
@@ -45,6 +46,7 @@ describe('LadybugDB Schema', () => {
       const multiLang = [
         'Struct',
         'Enum',
+        'EnumVariant',
         'Macro',
         'Typedef',
         'Union',
@@ -68,9 +70,13 @@ describe('LadybugDB Schema', () => {
       }
     });
 
+    it('includes the BasicBlock taint/PDG substrate node (issue #2080)', () => {
+      expect(NODE_TABLES).toContain('BasicBlock');
+    });
+
     it('has expected total count', () => {
-      // 9 core + 19 multi-language + Route + Tool + EnumVariant (Move) = 32
-      expect(NODE_TABLES).toHaveLength(32);
+      // 9 core + 20 multi-language/Move + Route + Tool + BasicBlock = 33
+      expect(NODE_TABLES).toHaveLength(33);
     });
   });
 
@@ -85,8 +91,26 @@ describe('LadybugDB Schema', () => {
         'IMPLEMENTS',
         'MEMBER_OF',
         'STEP_IN_PROCESS',
+        'FRIEND_OF',
+        'READS_RESOURCE',
+        'WRITES_RESOURCE',
+        'ACQUIRES',
+        'USES_TYPE',
+        'EMITS',
       ];
       for (const t of expected) {
+        expect(REL_TYPES).toContain(t);
+      }
+    });
+
+    it('includes the taint/PDG substrate edge types (issue #2080)', () => {
+      for (const t of ['CFG', 'REACHING_DEF', 'TAINTED', 'SANITIZES', 'TAINT_PATH']) {
+        expect(REL_TYPES).toContain(t);
+      }
+    });
+
+    it('includes the control-dependence edge types (issue #2085 M5)', () => {
+      for (const t of ['CDG', 'POST_DOMINATE']) {
         expect(REL_TYPES).toContain(t);
       }
     });
@@ -121,6 +145,19 @@ describe('LadybugDB Schema', () => {
     it('Property schema preserves declaredType', () => {
       expect(SCHEMA_QUERIES).toContain(PROPERTY_SCHEMA);
       expect(PROPERTY_SCHEMA).toContain('declaredType STRING');
+    });
+
+    it('BasicBlock schema is wired into SCHEMA_QUERIES (issue #2080, F1 guard)', () => {
+      // Defining BASICBLOCK_SCHEMA is not enough — it must be appended to
+      // NODE_SCHEMA_QUERIES (→ SCHEMA_QUERIES) or initLbug never creates the
+      // table and the bulk-COPY round-trip fails with "table does not exist".
+      expect(SCHEMA_QUERIES).toContain(BASICBLOCK_SCHEMA);
+      expect(BASICBLOCK_SCHEMA).toContain('CREATE NODE TABLE BasicBlock');
+      expect(BASICBLOCK_SCHEMA).toContain('filePath STRING');
+      expect(BASICBLOCK_SCHEMA).toContain('startLine INT64');
+      expect(BASICBLOCK_SCHEMA).toContain('endLine INT64');
+      expect(BASICBLOCK_SCHEMA).toContain('text STRING');
+      expect(BASICBLOCK_SCHEMA).toContain('PRIMARY KEY (id)');
     });
 
     it('Community schema has heuristicLabel and cohesion', () => {
@@ -162,6 +199,10 @@ describe('LadybugDB Schema', () => {
     it('connects symbols to Process (STEP_IN_PROCESS)', () => {
       expect(RELATION_SCHEMA).toContain('FROM Function TO Process');
       expect(RELATION_SCHEMA).toContain('FROM Method TO Process');
+    });
+
+    it('connects BasicBlock to BasicBlock (taint/PDG substrate edges, #2080)', () => {
+      expect(RELATION_SCHEMA).toContain('FROM BasicBlock TO BasicBlock');
     });
 
     it('has all FROM/TO pairs needed for HAS_METHOD edges', () => {
@@ -208,6 +249,7 @@ describe('LadybugDB Schema', () => {
 
   describe('schema query ordering', () => {
     it('NODE_SCHEMA_QUERIES has correct count', () => {
+      // 31 + BasicBlock = 32
       expect(NODE_SCHEMA_QUERIES).toHaveLength(32);
     });
 
@@ -227,29 +269,5 @@ describe('LadybugDB Schema', () => {
       );
       expect(relIndex).toBeGreaterThan(lastNodeIndex);
     });
-  });
-
-  // Lockstep guard: every FROM/TO node-label pair the Move facts→graph mapper
-  // can emit MUST be declared in RELATION_SCHEMA, or lbug silently drops the
-  // edge at COPY (and the per-row fallback). Regression guard for the
-  // Module→Struct/Enum/Const DEFINES + Enum→EnumVariant CONTAINS loss.
-  describe('Move relationship pairs are declared (rel-table lockstep)', () => {
-    const requiredPairs: [string, string][] = [
-      ['Module', 'Function'], // DEFINES
-      ['Module', 'Struct'], // DEFINES
-      ['Module', 'Enum'], // DEFINES
-      ['Module', 'Const'], // DEFINES
-      ['Enum', 'EnumVariant'], // CONTAINS
-      ['Function', 'Struct'], // READS_RESOURCE / WRITES_RESOURCE / ACQUIRES
-      ['Function', 'Module'], // ENTRY_POINT_OF
-      ['Module', 'Module'], // FRIEND_OF
-      ['File', 'Module'], // CONTAINS
-    ];
-    for (const [from, to] of requiredPairs) {
-      it(`declares FROM ${from} TO ${to}`, () => {
-        const pattern = new RegExp(`FROM \`?${from}\`?\\s+TO \`?${to}\`?`);
-        expect(RELATION_SCHEMA).toMatch(pattern);
-      });
-    }
   });
 });

@@ -39,6 +39,7 @@ export const NODE_COLORS: Record<NodeLabel, string> = {
   Route: '#f43f5e', // Rose - like Process
   Tool: '#a855f7', // Purple - like Project
   EnumVariant: '#fb923c', // Orange light - a Move enum's variant (child of Enum)
+  BasicBlock: '#475569', // Slate darker - control-flow node (muted, taint/PDG substrate)
 };
 
 // Node sizes by type - clear visual hierarchy with dramatic size differences
@@ -81,6 +82,7 @@ export const NODE_SIZES: Record<NodeLabel, number> = {
   Route: 5, // Like Enum
   Tool: 5, // Like Enum
   EnumVariant: 3, // Move enum variant - small leaf
+  BasicBlock: 2, // Tiny - control-flow node (taint/PDG substrate)
 };
 
 // Community color palette for cluster-based coloring
