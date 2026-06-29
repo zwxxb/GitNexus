@@ -4292,17 +4292,18 @@ export class LocalBackend {
       moduleFilter = ' AND s.moduleQualifiedName = $module';
       qp.module = params.module;
     }
-    const rows = await executeParameterized(
-      repo.lbugPath,
-      `MATCH (s) WHERE (s:Struct OR s:Enum) AND s.language = 'move' AND s.isResource = true${moduleFilter}
+    const resourceQuery = (label: 'Struct' | 'Enum') => `
+       MATCH (s:\`${label}\`) WHERE s.language = 'move' AND s.isResource = true${moduleFilter}
        OPTIONAL MATCH (f:Function)-[r:CodeRelation]->(s)
        WHERE r.type = 'READS_RESOURCE' OR r.type = 'WRITES_RESOURCE' OR r.type = 'ACQUIRES'
        RETURN s.name AS name, s.qualifiedName AS qualifiedName, s.filePath AS filePath,
               s.abilities AS abilities, s.fieldList AS fieldList,
               collect({ caller: f.qualifiedName, reason: r.type, isEntry: f.isEntry, isView: f.isView }) AS accessors
-       ORDER BY s.qualifiedName`,
-      qp,
-    );
+       ORDER BY s.qualifiedName`;
+    const rows = [
+      ...(await executeParameterized(repo.lbugPath, resourceQuery('Struct'), qp)),
+      ...(await executeParameterized(repo.lbugPath, resourceQuery('Enum'), qp)),
+    ].sort((a: any, b: any) => String(a.qualifiedName).localeCompare(String(b.qualifiedName)));
     if (!Array.isArray(rows)) return rows;
     const resources = rows.map((r: any) => ({
       ...r,

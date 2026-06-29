@@ -249,8 +249,8 @@ describe('LadybugDB Schema', () => {
 
   describe('schema query ordering', () => {
     it('NODE_SCHEMA_QUERIES has correct count', () => {
-      // 31 + BasicBlock = 32
-      expect(NODE_SCHEMA_QUERIES).toHaveLength(32);
+      // 31 + EnumVariant + BasicBlock = 33
+      expect(NODE_SCHEMA_QUERIES).toHaveLength(33);
     });
 
     it('REL_SCHEMA_QUERIES has one relation table', () => {
@@ -258,8 +258,8 @@ describe('LadybugDB Schema', () => {
     });
 
     it('SCHEMA_QUERIES includes all node + rel + embedding schemas', () => {
-      // 32 node + 1 rel + 1 embedding = 34
-      expect(SCHEMA_QUERIES).toHaveLength(34);
+      // 33 node + 1 rel + 1 embedding = 35
+      expect(SCHEMA_QUERIES).toHaveLength(35);
     });
 
     it('node schemas come before relation schemas in SCHEMA_QUERIES', () => {
