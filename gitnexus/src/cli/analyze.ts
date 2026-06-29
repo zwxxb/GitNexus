@@ -63,6 +63,16 @@ const realStderrWrite = process.stderr.write.bind(process.stderr);
 const realStdoutWrite = process.stdout.write.bind(process.stdout);
 
 const writeFatalToStderr = (label: string, err: unknown): void => {
+  // Walk to the innermost error tagged `userActionable` (set on errors whose
+  // remediation is an operator action — missing/old external tool, stale
+  // config). Render those as a single line; stack/cause are noise for them.
+  for (let cur: unknown = err, depth = 0; cur instanceof Error && depth < 5; depth++) {
+    if ((cur as { userActionable?: boolean }).userActionable) {
+      realStderrWrite(`\n  ${label}: ${cur.message}\n`);
+      return;
+    }
+    cur = (cur as { cause?: unknown }).cause;
+  }
   const isErr = err instanceof Error;
   const message = isErr ? err.message : String(err);
   realStderrWrite(`\n  ${label}: ${message}\n`);

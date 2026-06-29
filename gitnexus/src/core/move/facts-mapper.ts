@@ -10,7 +10,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { GraphNode, GraphRelationship, NodeLabel, RelationshipType } from 'gitnexus-shared';
+import type {
+  GraphNode,
+  GraphRelationship,
+  NodeLabel,
+  NodeProperties,
+  RelationshipType,
+} from 'gitnexus-shared';
 import type { MoveFactsMap, MoveFactsTypeParam } from './compiler-facts.js';
 import {
   moveModuleNodeId,
@@ -19,7 +25,9 @@ import {
   moveEnumNodeId,
   moveConstNodeId,
   moveEnumVariantNodeId,
+  moveFieldNodeId,
   moveLocalName,
+  parseMoveLambdaHostName,
   parseMoveModuleQualifiedName,
 } from './symbol-id.js';
 import {
@@ -47,6 +55,15 @@ export interface MoveFactsMapResult {
   pendingFriends: PendingFriend[];
   /** Signature type refs that need the full cross-package type index. */
   pendingTypeRef: PendingTypeRef[];
+  /** Lambda → host links that need the host's Function node id (resolved post-pass). */
+  pendingLambdaHosts: PendingLambdaHost[];
+}
+
+export interface PendingLambdaHost {
+  /** The lambda's Function node id (target of the CALLS edge). */
+  lambdaFnNodeId: string;
+  /** Host function's fully-qualified name (`<module>::<localHost>`). */
+  hostQualified: string;
 }
 
 export interface PendingResource {
@@ -125,6 +142,7 @@ export function mapFactsToGraph(
   const pendingResource: PendingResource[] = [];
   const pendingFriends: PendingFriend[] = [];
   const pendingTypeRef: PendingTypeRef[] = [];
+  const pendingLambdaHosts: PendingLambdaHost[] = [];
 
   // ── Pass A: nodes (modules, functions, types, constants) ─────────────────
   for (const [moduleQualified, mod] of Object.entries(facts)) {
@@ -177,33 +195,46 @@ export function mapFactsToGraph(
         addSignatureTypes(p.type, MOVE_EDGE_REASON.fnParamType);
       }
       addSignatureTypes(fn.returnType, MOVE_EDGE_REASON.fnReturnType);
+      const fnProps: NodeProperties = {
+        name: fn.name,
+        filePath: fnFile,
+        language: MOVE_LANGUAGE,
+        qualifiedName: fnQualified,
+        moduleQualifiedName: moduleQualified,
+        startLine: fn.span?.[0],
+        endLine: fn.span?.[1],
+        visibility: fn.visibility,
+        visibilityModifier: fn.visibility,
+        isEntry: fn.isEntry,
+        isView: fn.isView,
+        isInline: fn.isInline,
+        isNative: fn.isNative,
+        isInitModule: fn.name === 'init_module',
+        hasSpec: fn.hasSpec,
+        attributes: attrs,
+        typeParamsJson: typeParamsJson(fn.typeParams),
+        acquires: arr(fn.acquiresInferred),
+        usedTypes: [],
+        returnType: fn.returnType ?? undefined,
+        parameterCount: arr(fn.params).length,
+        locationFidelity: fn.file ? 'precise' : 'package',
+      };
+      // Lambda → host link queued for Pass 2 (host fn node may not yet exist
+      // when this lambda is mapped). The canonical Cypher path for "is this a
+      // lambda?" is the inbound CALLS edge with reason 'move-lambda-of-host';
+      // we do not project an `isLambda` boolean property because the lbug
+      // Function table does not carry it.
+      const lambdaHostLocal = parseMoveLambdaHostName(fn.name);
+      if (lambdaHostLocal) {
+        pendingLambdaHosts.push({
+          lambdaFnNodeId: fnNodeId,
+          hostQualified: `${moduleQualified}::${lambdaHostLocal}`,
+        });
+      }
       nodes.push({
         id: fnNodeId,
         label: 'Function',
-        properties: {
-          name: fn.name,
-          filePath: fnFile,
-          language: MOVE_LANGUAGE,
-          qualifiedName: fnQualified,
-          moduleQualifiedName: moduleQualified,
-          startLine: fn.span?.[0],
-          endLine: fn.span?.[1],
-          visibility: fn.visibility,
-          visibilityModifier: fn.visibility,
-          isEntry: fn.isEntry,
-          isView: fn.isView,
-          isInline: fn.isInline,
-          isNative: fn.isNative,
-          isInitModule: fn.name === 'init_module',
-          hasSpec: fn.hasSpec,
-          attributes: attrs,
-          typeParamsJson: typeParamsJson(fn.typeParams),
-          acquires: arr(fn.acquiresInferred),
-          usedTypes: [],
-          returnType: fn.returnType ?? undefined,
-          parameterCount: arr(fn.params).length,
-          locationFidelity: fn.file ? 'precise' : 'package',
-        },
+        properties: fnProps,
       });
       edge(moduleNodeId, fnNodeId, 'DEFINES', 1.0, MOVE_EDGE_REASON.definesFunction);
 
@@ -274,6 +305,29 @@ export function mapFactsToGraph(
           },
         });
         edge(moduleNodeId, structNodeId, 'DEFINES', 1.0, MOVE_EDGE_REASON.definesStruct);
+        // Per-field Property nodes + HAS_PROPERTY edges so ACCESSES queries and
+        // field-level taint can target individual fields. The composite name +
+        // type live on the Struct as a `fields` array projection, but only the
+        // per-field nodes let Cypher join on `(:Struct)-[:HAS_PROPERTY]->(:Property)`.
+        for (const field of arr(ty.fields)) {
+          const propId = moveFieldNodeId(tyQualified, field.name, tyFile);
+          nodes.push({
+            id: propId,
+            label: 'Property',
+            properties: {
+              name: field.name,
+              filePath: tyFile,
+              language: MOVE_LANGUAGE,
+              qualifiedName: `${tyQualified}.${field.name}`,
+              parentStruct: tyQualified,
+              moduleQualifiedName: moduleQualified,
+              declaredType: field.type,
+              positional: field.positional,
+              startLine: ty.span?.[0],
+            },
+          });
+          edge(structNodeId, propId, 'HAS_PROPERTY', 1.0, MOVE_EDGE_REASON.hasField);
+        }
       } else {
         const eId = moveEnumNodeId(tyQualified, tyFile);
         structNodeMap.set(tyQualified, eId);
@@ -361,10 +415,42 @@ export function mapFactsToGraph(
     pendingResource,
     pendingFriends,
     pendingTypeRef,
+    pendingLambdaHosts,
   };
 }
 
-export function buildLocalNameIndex(structNodeMap: ReadonlyMap<string, string>): Map<string, string[]> {
+/**
+ * Resolve queued lambda→host links into CALLS edges. Run after every package's
+ * facts have been mapped so the host's Function node is guaranteed to exist
+ * (the host may be defined in a different module within the package, or — for
+ * cross-package lambda capture — in another package altogether).
+ */
+export function resolveLambdaHostEdges(
+  pendingLambdaHosts: readonly PendingLambdaHost[],
+  functionNodeMap: ReadonlyMap<string, string>,
+  edgeSink: (rel: GraphRelationship) => void,
+): void {
+  const seen = new Set<string>();
+  for (const p of pendingLambdaHosts) {
+    const hostId = functionNodeMap.get(p.hostQualified);
+    if (!hostId) continue;
+    const key = `${hostId}\0${p.lambdaFnNodeId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    edgeSink({
+      id: `rel:${randomUUID()}`,
+      sourceId: hostId,
+      targetId: p.lambdaFnNodeId,
+      type: 'CALLS',
+      confidence: 0.9,
+      reason: MOVE_EDGE_REASON.lambdaHost,
+    });
+  }
+}
+
+export function buildLocalNameIndex(
+  structNodeMap: ReadonlyMap<string, string>,
+): Map<string, string[]> {
   const structIdsByLocalName = new Map<string, string[]>();
   for (const [qn, id] of structNodeMap) {
     const key = moveLocalName(qn);
