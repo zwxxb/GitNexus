@@ -486,6 +486,10 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Module\` TO \`Const\`,
   FROM \`Enum\` TO \`EnumVariant\`,
   FROM \`Module\` TO \`EnumVariant\`,
+  // Move/Aptos: enum variant fields are first-class Property nodes (named or
+  // positional). Without this pair the HAS_PROPERTY edges from variants get
+  // dropped on serialization while the Property nodes still land.
+  FROM \`EnumVariant\` TO \`Property\`,
   FROM \`Typedef\` TO Community,
   FROM \`Union\` TO Community,
   FROM \`Namespace\` TO Community,

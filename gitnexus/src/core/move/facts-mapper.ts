@@ -356,6 +356,7 @@ export function mapFactsToGraph(
         edge(moduleNodeId, eId, 'DEFINES', 1.0, MOVE_EDGE_REASON.definesEnum);
         for (const variant of arr(ty.variants)) {
           const vId = moveEnumVariantNodeId(tyQualified, variant.name, tyFile);
+          const variantQualified = `${tyQualified}::${variant.name}`;
           nodes.push({
             id: vId,
             label: 'EnumVariant',
@@ -363,7 +364,7 @@ export function mapFactsToGraph(
               name: variant.name,
               filePath: tyFile,
               language: MOVE_LANGUAGE,
-              qualifiedName: `${tyQualified}::${variant.name}`,
+              qualifiedName: variantQualified,
               parentEnum: tyQualified,
               moduleQualifiedName: moduleQualified,
               variantKind: variant.kind,
@@ -379,6 +380,28 @@ export function mapFactsToGraph(
             },
           });
           edge(eId, vId, 'CONTAINS', 1.0, MOVE_EDGE_REASON.containsVariant);
+          // Per-field Property nodes — same shape as struct fields (see above).
+          // Positional fields carry their index as `name` (`"0"`, `"1"`, …) so
+          // the id stays unique within the variant.
+          for (const field of arr(variant.fields)) {
+            const propId = moveFieldNodeId(variantQualified, field.name, tyFile);
+            nodes.push({
+              id: propId,
+              label: 'Property',
+              properties: {
+                name: field.name,
+                filePath: tyFile,
+                language: MOVE_LANGUAGE,
+                qualifiedName: `${variantQualified}.${field.name}`,
+                parentEnumVariant: variantQualified,
+                parentEnum: tyQualified,
+                moduleQualifiedName: moduleQualified,
+                declaredType: field.type,
+                positional: field.positional,
+              },
+            });
+            edge(vId, propId, 'HAS_PROPERTY', 1.0, MOVE_EDGE_REASON.hasField);
+          }
         }
       }
     }
