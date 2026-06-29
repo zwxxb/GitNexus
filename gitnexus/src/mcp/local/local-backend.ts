@@ -210,6 +210,10 @@ export const VALID_RELATION_TYPES = new Set([
   'HANDLES_TOOL',
   'ENTRY_POINT_OF',
   'WRAPS',
+  'ACQUIRES',
+  'READS_RESOURCE',
+  'WRITES_RESOURCE',
+  'USES_TYPE',
 ]);
 
 /**
@@ -1598,6 +1602,13 @@ export class LocalBackend {
         return this.toolMap(repo, params);
       case 'api_impact':
         return this.apiImpact(repo, params);
+      // Move/Aptos tools (graph-property/Cypher only — no move-flow shell-out).
+      case 'move_entries':
+        return this.moveEntries(repo, params);
+      case 'move_resources':
+        return this.moveResources(repo, params);
+      case 'move_impact':
+        return this.moveImpact(repo, params);
       case 'trace':
         return this.trace(repo, params);
       default:
@@ -4251,6 +4262,103 @@ export class LocalBackend {
       applied: !dry_run,
       ...(failedFiles.length > 0 && { failed_files: failedFiles }),
     };
+  }
+
+  private async moveEntries(
+    repo: RepoHandle,
+    params: {
+      module?: string;
+      kind?: 'entry' | 'view' | 'init_module' | 'inline' | 'native';
+      attribute?: string;
+    },
+  ): Promise<any> {
+    await this.ensureInitialized(repo);
+    if (!isLbugReady(repo.lbugPath)) return { error: 'LadybugDB not ready. Index may be corrupted.' };
+    const clauses: string[] = ["f.language = 'move'"];
+    switch (params?.kind) {
+      case 'entry':
+        clauses.push('f.isEntry = true');
+        break;
+      case 'view':
+        clauses.push('f.isView = true');
+        break;
+      case 'init_module':
+        clauses.push('f.isInitModule = true');
+        break;
+      case 'inline':
+        clauses.push('f.isInline = true');
+        break;
+      case 'native':
+        clauses.push('f.isNative = true');
+        break;
+      default:
+        clauses.push('(f.isEntry = true OR f.isView = true OR f.isInitModule = true)');
+    }
+    const qp: Record<string, unknown> = {};
+    if (typeof params?.module === 'string' && params.module) {
+      clauses.push('f.moduleQualifiedName = $module');
+      qp.module = params.module;
+    }
+    const rows = await executeParameterized(
+      repo.lbugPath,
+      `MATCH (f:Function) WHERE ${clauses.join(' AND ')}
+       RETURN f.name AS name, f.qualifiedName AS qualifiedName, f.filePath AS filePath,
+              f.isEntry AS isEntry, f.isView AS isView, f.isInitModule AS isInitModule,
+              f.isInline AS isInline, f.isNative AS isNative, f.visibility AS visibility,
+              f.acquires AS acquires, f.attributes AS attributes, f.returnType AS returnType
+       ORDER BY f.filePath, f.name`,
+      qp,
+    );
+    if (!Array.isArray(rows)) return rows;
+    const attribute = params?.attribute;
+    const filtered =
+      typeof attribute === 'string' && attribute
+        ? rows.filter((r: any) => Array.isArray(r.attributes) && r.attributes.includes(attribute))
+        : rows;
+    return { entries: filtered, count: filtered.length };
+  }
+
+  private async moveResources(repo: RepoHandle, params: { module?: string }): Promise<any> {
+    await this.ensureInitialized(repo);
+    if (!isLbugReady(repo.lbugPath)) return { error: 'LadybugDB not ready. Index may be corrupted.' };
+    const qp: Record<string, unknown> = {};
+    let moduleFilter = '';
+    if (typeof params?.module === 'string' && params.module) {
+      moduleFilter = ' AND s.moduleQualifiedName = $module';
+      qp.module = params.module;
+    }
+    const resourceQuery = (label: 'Struct' | 'Enum') => `
+       MATCH (s:\`${label}\`) WHERE s.language = 'move' AND s.isResource = true${moduleFilter}
+       OPTIONAL MATCH (f:Function)-[r:CodeRelation]->(s)
+       WHERE r.type = 'READS_RESOURCE' OR r.type = 'WRITES_RESOURCE' OR r.type = 'ACQUIRES'
+       RETURN s.name AS name, s.qualifiedName AS qualifiedName, s.filePath AS filePath,
+              s.abilities AS abilities, s.fieldList AS fieldList,
+              collect({ caller: f.qualifiedName, reason: r.type, isEntry: f.isEntry, isView: f.isView }) AS accessors
+       ORDER BY s.qualifiedName`;
+    const rows = [
+      ...(await executeParameterized(repo.lbugPath, resourceQuery('Struct'), qp)),
+      ...(await executeParameterized(repo.lbugPath, resourceQuery('Enum'), qp)),
+    ].sort((a: any, b: any) => String(a.qualifiedName).localeCompare(String(b.qualifiedName)));
+    if (!Array.isArray(rows)) return rows;
+    const resources = rows.map((r: any) => ({
+      ...r,
+      accessors: Array.isArray(r.accessors)
+        ? r.accessors.filter((a: any) => a && a.caller)
+        : [],
+    }));
+    return { resources, count: resources.length };
+  }
+
+  private async moveImpact(
+    repo: RepoHandle,
+    params: { target: string; direction?: 'upstream' | 'downstream'; maxDepth?: number },
+  ): Promise<any> {
+    return this.impact(repo, {
+      target: params.target,
+      direction: params.direction ?? 'upstream',
+      maxDepth: params.maxDepth,
+      relationTypes: ['CALLS', 'READS_RESOURCE', 'WRITES_RESOURCE', 'ACQUIRES', 'USES_TYPE'],
+    } as ImpactParams);
   }
 
   private async trace(repo: RepoHandle, params: TraceParams): Promise<any> {

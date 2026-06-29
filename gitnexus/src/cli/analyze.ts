@@ -36,9 +36,13 @@ import {
   validateBranchName,
   GitNexusRcError,
 } from './analyze-config.js';
-import { runFullAnalysis } from '../core/run-analyze.js';
+import { runFullAnalysis, repoHasMove } from '../core/run-analyze.js';
 import { getMaxFileSizeBannerMessage } from '../core/ingestion/utils/max-file-size.js';
-import { warnMissingOptionalGrammars, getOptionalGrammarExtensions } from './optional-grammars.js';
+import {
+  warnMissingOptionalGrammars,
+  warnIfMoveUnavailable,
+  getOptionalGrammarExtensions,
+} from './optional-grammars.js';
 import { glob } from 'glob';
 import fs from 'fs/promises';
 import { cliError } from './cli-message.js';
@@ -1132,6 +1136,17 @@ const analyzeCommandImpl = async (
     }
   } catch {
     // Best-effort warning \u2014 never block analyze on the precheck.
+  }
+
+  // Move ingestion is compiler-first via move-flow; warn once if the repo
+  // has Move sources but no usable binary is reachable. Uses the shared
+  // `repoHasMove` helper so the precheck keys off the same Move.toml signal
+  // that the ingestion phase actually uses (a repo with loose `.move` files
+  // but no Move.toml would warn but ingest nothing).
+  try {
+    warnIfMoveUnavailable({ context: 'analyze', repoHasMove: await repoHasMove(repoPath) });
+  } catch {
+    // Best-effort \u2014 never block analyze on the precheck.
   }
 
   // KuzuDB migration cleanup is handled by runFullAnalysis internally.
