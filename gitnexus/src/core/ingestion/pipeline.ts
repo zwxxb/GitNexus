@@ -43,6 +43,8 @@ import {
   type CommunitiesOutput,
   type ProcessesOutput,
 } from './pipeline-phases/index.js';
+import { createMoveIngestPhase } from '../move/move-ingest.js';
+import type { MoveFlowClient } from '../move/mcp-client.js';
 
 export interface PipelineOptions {
   /**
@@ -224,6 +226,13 @@ export interface PipelineOptions {
    */
   keepLocalValueSymbols?: boolean;
   /**
+   * move-flow MCP client for compiler-first Move/Aptos ingestion. When set, the
+   * `moveIngest` phase uses it to ingest every Move package (Move.toml) found in
+   * the repo. When `null`/undefined, `moveIngest` is a no-op (non-Move repos).
+   * `run-analyze.ts` creates this only when the repo contains a `Move.toml`.
+   */
+  moveFlowClient?: MoveFlowClient | null;
+  /**
    * Extra fetch-wrapper function names to treat as HTTP consumers, threaded
    * from `.gitnexusrc` `fetchWrappers` via `AnalyzeOptions` (#1589/#1852
    * residual). The routes phase unions these with the auto-detected `fetch()`
@@ -260,6 +269,8 @@ export function buildPhaseList(options?: PipelineOptions): PipelinePhase[] {
     new PhaseRegistry<PipelineOptions>()
       .register(scanPhase)
       .register(structurePhase)
+      // Compiler-first Move ingestion (no-op when no move-flow client / no Move pkgs).
+      .register(createMoveIngestPhase(options?.moveFlowClient ?? null))
       .register(markdownPhase)
       .register(cobolPhase)
       .register(parsePhase)

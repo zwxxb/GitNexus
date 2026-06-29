@@ -1,0 +1,7 @@
+[package]
+name = "pkg_a"
+
+[addresses]
+app = "0xA"
+oracle = "0xBEEF"
+std = "0x1"

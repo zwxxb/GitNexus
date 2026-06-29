@@ -17,7 +17,7 @@ import {
 
 describe('VALID_RELATION_TYPES', () => {
   it('contains all expected relation types', () => {
-    expect(VALID_RELATION_TYPES.size).toBe(16);
+    expect(VALID_RELATION_TYPES.size).toBe(20);
     for (const t of [
       'CALLS',
       'IMPORTS',
@@ -37,6 +37,10 @@ describe('VALID_RELATION_TYPES', () => {
       'HANDLES_TOOL',
       'ENTRY_POINT_OF',
       'WRAPS',
+      'ACQUIRES',
+      'READS_RESOURCE',
+      'WRITES_RESOURCE',
+      'USES_TYPE',
     ]) {
       expect(VALID_RELATION_TYPES.has(t)).toBe(true);
     }
@@ -61,9 +65,9 @@ describe('VALID_RELATION_TYPES', () => {
     // Cross-function TAINT_PATH (Function→Function) is the interprocedural
     // analogue of TAINTED — surfaced ONLY via `explain` (its interprocedural
     // findings), never impact()'s BFS. Pinned so a future allow-all sweep
-    // can't drag it in, and the set size stays fixed at 16.
+    // can't drag it in, and the set size stays fixed at 20.
     expect(VALID_RELATION_TYPES.has('TAINT_PATH')).toBe(false);
-    expect(VALID_RELATION_TYPES.size).toBe(16);
+    expect(VALID_RELATION_TYPES.size).toBe(20);
   });
 
   it('CDG control-dependence edge types stay OUT of the impact allow-list (#2085 M5)', () => {

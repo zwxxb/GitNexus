@@ -19,6 +19,7 @@
 import type { PipelinePhase, PipelineContext, PhaseResult } from './types.js';
 import { getPhaseOutput } from './types.js';
 import type { StructureOutput } from './structure.js';
+import type { MoveIngestOutput } from '../../move/move-ingest.js';
 import type { BindingAccumulator } from '../binding-accumulator.js';
 import type { ParsedFile } from 'gitnexus-shared';
 import type {
@@ -84,16 +85,24 @@ export interface ParseOutput {
 
 export const parsePhase: PipelinePhase<ParseOutput> = {
   name: 'parse',
-  deps: ['structure', 'markdown', 'cobol'],
+  deps: ['structure', 'markdown', 'cobol', 'moveIngest'],
 
   async execute(
     ctx: PipelineContext,
     deps: ReadonlyMap<string, PhaseResult<unknown>>,
   ): Promise<ParseOutput> {
-    const { scannedFiles, allPaths, allPathSet, totalFiles } = getPhaseOutput<StructureOutput>(
-      deps,
-      'structure',
-    );
+    const structure = getPhaseOutput<StructureOutput>(deps, 'structure');
+    const { allPathSet, totalFiles } = structure;
+
+    // Compiler-first Move files are ingested by `moveIngest`; never tree-sit them.
+    const moveIngest = getPhaseOutput<MoveIngestOutput>(deps, 'moveIngest');
+    const ingested = moveIngest.ingestedFiles;
+    const scannedFiles = ingested.size
+      ? structure.scannedFiles.filter((f) => !ingested.has(f.path))
+      : structure.scannedFiles;
+    const allPaths = ingested.size
+      ? structure.allPaths.filter((p) => !ingested.has(p))
+      : structure.allPaths;
 
     const result = await runChunkedParseAndResolve(
       ctx.graph,
