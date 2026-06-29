@@ -35,10 +35,12 @@ import {
   buildLocalNameIndex,
   mapFactsToGraph,
   resolveFriendEdges,
+  resolveLambdaHostEdges,
   resolveResourceEdges,
   resolveTypeRefEdges,
   type MoveFactsMapResult,
   type PendingFriend,
+  type PendingLambdaHost,
   type PendingResource,
   type PendingTypeRef,
 } from './facts-mapper.js';
@@ -87,6 +89,7 @@ interface MoveIngestState {
   pendingResource: PendingResource[];
   pendingFriends: PendingFriend[];
   pendingTypeRef: PendingTypeRef[];
+  pendingLambdaHosts: PendingLambdaHost[];
   droppedResourceRefs: { fnNodeId: string; target: string }[];
 }
 
@@ -103,6 +106,7 @@ function createState(): MoveIngestState {
     pendingResource: [],
     pendingFriends: [],
     pendingTypeRef: [],
+    pendingLambdaHosts: [],
     droppedResourceRefs: [],
   };
 }
@@ -149,6 +153,7 @@ function applyMapped(
   state.pendingResource.push(...mapped.pendingResource);
   state.pendingFriends.push(...mapped.pendingFriends);
   state.pendingTypeRef.push(...mapped.pendingTypeRef);
+  state.pendingLambdaHosts.push(...mapped.pendingLambdaHosts);
 }
 
 export function createMoveIngestPhase(
@@ -178,10 +183,13 @@ export function createMoveIngestPhase(
 
       const { hasFactsQuery } = await client.capabilities();
       if (!hasFactsQuery) {
-        throw new Error(
-          'move-flow is too old or installed without the `facts` query; ' +
-            'GitNexus Move ingestion requires a move-flow build that exposes ' +
-            '`move_package_query { query: "facts" }`. Please upgrade move-flow.',
+        // userActionable: rendered as a one-liner without a stack — the fix is
+        // an operator action (upgrade move-flow), not a code bug.
+        throw Object.assign(
+          new Error(
+            'move-flow is too old — upgrade to a build that exposes `move_package_query { query: "facts" }`.',
+          ),
+          { userActionable: true },
         );
       }
       const state = createState();
@@ -215,6 +223,7 @@ export function createMoveIngestPhase(
 
       // Pass 2+: link edges that need the full cross-package node index.
       linkCallEdges(ctx.graph, state);
+      linkLambdaHostEdges(ctx.graph, state);
       linkResourceAndFriendEdges(ctx.graph, state);
       linkFileImports(ctx.graph, state);
       linkFileModuleContains(ctx.graph, state);
@@ -255,6 +264,19 @@ function linkCallEdges(graph: KnowledgeGraph, state: MoveIngestState): void {
   }
 }
 
+/**
+ * CALLS edges from each `__lambda__N__host` function back to its host. move-flow
+ * synthesises lambdas as standalone functions but does NOT include the host-to-
+ * lambda link in `call_graph` — without it, upstream traversal from the lambda
+ * dead-ends and processes that route through a callback (e.g. market_callbacks
+ * → settle_trade) lose the bridge.
+ */
+function linkLambdaHostEdges(graph: KnowledgeGraph, state: MoveIngestState): void {
+  resolveLambdaHostEdges(state.pendingLambdaHosts, state.functionNodeMap, (rel) =>
+    graph.addRelationship(rel),
+  );
+}
+
 /** Resource/friend edges from facts, resolved after all package nodes exist. */
 function linkResourceAndFriendEdges(graph: KnowledgeGraph, state: MoveIngestState): void {
   const structIdsByLocalName = buildLocalNameIndex(state.structNodeMap);
@@ -263,19 +285,18 @@ function linkResourceAndFriendEdges(graph: KnowledgeGraph, state: MoveIngestStat
     state.structNodeMap,
     structIdsByLocalName,
     (rel) => graph.addRelationship(rel),
-    (pending) => state.droppedResourceRefs.push({ fnNodeId: pending.fnNodeId, target: pending.target }),
-    (pending) => state.droppedResourceRefs.push({ fnNodeId: pending.fnNodeId, target: pending.target }),
+    (pending) =>
+      state.droppedResourceRefs.push({ fnNodeId: pending.fnNodeId, target: pending.target }),
+    (pending) =>
+      state.droppedResourceRefs.push({ fnNodeId: pending.fnNodeId, target: pending.target }),
   );
-  resolveFriendEdges(state.pendingFriends, state.moduleFileMap, (rel) => graph.addRelationship(rel));
-  resolveTypeRefEdges(
-    state.pendingTypeRef,
-    state.structNodeMap,
-    structIdsByLocalName,
-    (rel) => {
-      graph.addRelationship(rel);
-      addUsedType(graph, rel.sourceId, rel.targetId);
-    },
+  resolveFriendEdges(state.pendingFriends, state.moduleFileMap, (rel) =>
+    graph.addRelationship(rel),
   );
+  resolveTypeRefEdges(state.pendingTypeRef, state.structNodeMap, structIdsByLocalName, (rel) => {
+    graph.addRelationship(rel);
+    addUsedType(graph, rel.sourceId, rel.targetId);
+  });
 }
 
 function addUsedType(graph: KnowledgeGraph, functionNodeId: string, typeNodeId: string): void {

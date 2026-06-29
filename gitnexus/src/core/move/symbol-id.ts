@@ -60,3 +60,22 @@ export function moveEnumVariantNodeId(
 ): string {
   return `EnumVariant:${filePath}:${enumQualifiedName}::${variantName}`;
 }
+
+export function moveFieldNodeId(
+  structQualifiedName: string,
+  fieldName: string,
+  filePath: string,
+): string {
+  return `Property:${filePath}:${structQualifiedName}.${fieldName}`;
+}
+
+/**
+ * Parse `__lambda__<n>__<host>` into the host function's local name, or null
+ * when the input is not a lambda symbol. move-flow synthesises lambdas as
+ * Function symbols whose names follow this convention so they can be referenced
+ * by the call graph; the host is always in the same module as the lambda.
+ */
+export function parseMoveLambdaHostName(localName: string): string | null {
+  const match = /^__lambda__\d+__(.+)$/.exec(localName);
+  return match ? match[1] : null;
+}

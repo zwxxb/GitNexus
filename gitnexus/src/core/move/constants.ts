@@ -8,9 +8,28 @@
 /** `NodeProperties.language` tag for every Move symbol. */
 export const MOVE_LANGUAGE = 'move';
 
-/** Parsed Move attribute names of interest. */
+/**
+ * Parsed Move attribute names of interest. The mapper persists the full
+ * attribute list on every Function node as `attributes: STRING[]`, so the
+ * canonical Cypher query is `WHERE '<name>' IN f.attributes`. These constants
+ * exist so the mapper, downstream filters, and tests share a typo-resistant
+ * single source of truth for the names that matter (compiler attribute names
+ * follow the move-flow `facts` payload verbatim).
+ */
 export const MOVE_ATTR = {
   EVENT: 'event',
+  /** `#[persistent]` — vault burn reentrancy guard and similar invariants. */
+  PERSISTENT: 'persistent',
+  /** `#[randomness]` — randomness-attestation entry function. */
+  RANDOMNESS: 'randomness',
+  /** `#[deprecated]` — marked obsolete; flagged by Move lints. */
+  DEPRECATED: 'deprecated',
+  /** `#[lint::skip(...)]` — suppresses one or more Move lints. */
+  LINT_SKIP: 'lint::skip',
+  /** `#[verify_only]` — visible to the Move Prover only; excluded from runtime. */
+  VERIFY_ONLY: 'verify_only',
+  /** `#[view]` — read-only view function. */
+  VIEW: 'view',
 } as const;
 
 /** Move struct abilities of interest. */
@@ -45,6 +64,10 @@ export const MOVE_EDGE_REASON = {
   acquires: 'move-acquires',
   fnParamType: 'move-fn-param-type',
   fnReturnType: 'move-fn-return-type',
+  // Field edges (struct → field)
+  hasField: 'move-struct-has-field',
+  // Lambda → host edges (host fn → __lambda__N__host)
+  lambdaHost: 'move-lambda-of-host',
   // Entry-point edge reasons (also set as funcNode.properties.entryPointReason)
   entryFunction: 'move-entry-function',
   viewFunction: 'move-view-function',
