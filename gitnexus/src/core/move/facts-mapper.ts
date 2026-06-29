@@ -177,7 +177,18 @@ export function mapFactsToGraph(
     // Functions
     for (const fn of arr(mod.functions)) {
       const fnQualified = `${moduleQualified}::${fn.name}`;
-      const fnFile = moveRepoRelativePath(fn.file ?? moduleFileAbs, repoPath);
+      // For lambdas, move-flow reports `fn.file` as the callee's source where
+      // the closure body gets specialized — which is an external aptos-framework
+      // dep when the host passes the closure to a framework helper (e.g.
+      // big_ordered_map::insert). Override to the module's own file so the
+      // lambda's filePath points to where the closure is written in user source.
+      // The lambda's span belongs to that dep file, so drop it; locationFidelity
+      // demotes to 'module'. See parseMoveLambdaHostName for the naming convention.
+      const isLambda = parseMoveLambdaHostName(fn.name) !== null;
+      const fnFile = moveRepoRelativePath(
+        isLambda ? moduleFileAbs : (fn.file ?? moduleFileAbs),
+        repoPath,
+      );
       const fnNodeId = moveFunctionNodeId(fnQualified, fnFile);
       functionNodeMap.set(fnQualified, fnNodeId);
       const attrs = attributeNames(fn.attributes);
@@ -201,8 +212,8 @@ export function mapFactsToGraph(
         language: MOVE_LANGUAGE,
         qualifiedName: fnQualified,
         moduleQualifiedName: moduleQualified,
-        startLine: fn.span?.[0],
-        endLine: fn.span?.[1],
+        startLine: isLambda ? undefined : fn.span?.[0],
+        endLine: isLambda ? undefined : fn.span?.[1],
         visibility: fn.visibility,
         visibilityModifier: fn.visibility,
         isEntry: fn.isEntry,
@@ -217,15 +228,15 @@ export function mapFactsToGraph(
         usedTypes: [],
         returnType: fn.returnType ?? undefined,
         parameterCount: arr(fn.params).length,
-        locationFidelity: fn.file ? 'precise' : 'package',
+        locationFidelity: isLambda ? 'module' : fn.file ? 'precise' : 'package',
       };
       // Lambda → host link queued for Pass 2 (host fn node may not yet exist
       // when this lambda is mapped). The canonical Cypher path for "is this a
       // lambda?" is the inbound CALLS edge with reason 'move-lambda-of-host';
       // we do not project an `isLambda` boolean property because the lbug
       // Function table does not carry it.
-      const lambdaHostLocal = parseMoveLambdaHostName(fn.name);
-      if (lambdaHostLocal) {
+      if (isLambda) {
+        const lambdaHostLocal = parseMoveLambdaHostName(fn.name)!;
         pendingLambdaHosts.push({
           lambdaFnNodeId: fnNodeId,
           hostQualified: `${moduleQualified}::${lambdaHostLocal}`,
