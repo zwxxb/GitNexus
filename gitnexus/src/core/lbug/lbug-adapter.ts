@@ -19,6 +19,13 @@ import {
 } from './schema.js';
 import { streamAllCSVsToDisk } from './csv-generator.js';
 import type { CachedEmbedding } from '../embeddings/types.js';
+import {
+  MOVE_CONST_COLUMNS,
+  MOVE_ENUM_VARIANT_COLUMNS,
+  MOVE_FUNCTION_COLUMNS,
+  MOVE_MODULE_COLUMNS,
+  MOVE_STRUCT_LIKE_COLUMNS,
+} from './move-columns.js';
 import { extensionManager, type ExtensionEnsureOptions } from './extension-loader.js';
 import {
   closeLbugConnection,
@@ -1101,6 +1108,8 @@ const TABLES_WITH_EXPORTED = new Set<string>([
   'CodeElement',
 ]);
 
+const copyColumns = (columns: readonly string[]): string => columns.join(', ');
+
 const getCopyQuery = (table: NodeTableName, filePath: string): string => {
   const t = escapeTableName(table);
   if (table === 'File') {
@@ -1133,19 +1142,19 @@ const getCopyQuery = (table: NodeTableName, filePath: string): string => {
   // Move-augmented tables (compiler-sourced columns). Must match schema.ts +
   // csv-generator.ts header order exactly.
   if (table === 'Function') {
-    return `COPY ${t}(id, name, filePath, startLine, endLine, isExported, content, description, language, qualifiedName, moduleQualifiedName, visibility, visibilityModifier, isEntry, isView, isInitModule, isInline, isNative, hasSpec, parameterCount, returnType, acquires, usedTypes, attributes, typeParamsJson, expectedFailureJson, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+    return `COPY ${t}(${copyColumns(MOVE_FUNCTION_COLUMNS)}) FROM "${filePath}" ${COPY_CSV_OPTS}`;
   }
   if (table === 'Struct' || table === 'Enum') {
-    return `COPY ${t}(id, name, filePath, startLine, endLine, content, description, language, qualifiedName, moduleQualifiedName, moduleAddress, abilities, isResource, isEvent, fieldList, attributes, typeParamsJson, moveDeclarationKind, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+    return `COPY ${t}(${copyColumns(MOVE_STRUCT_LIKE_COLUMNS)}) FROM "${filePath}" ${COPY_CSV_OPTS}`;
   }
   if (table === 'EnumVariant') {
-    return `COPY ${t}(id, name, filePath, startLine, endLine, content, description, language, qualifiedName, parentEnum, moduleQualifiedName, variantKind, fieldsJson, attributes, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+    return `COPY ${t}(${copyColumns(MOVE_ENUM_VARIANT_COLUMNS)}) FROM "${filePath}" ${COPY_CSV_OPTS}`;
   }
   if (table === 'Const') {
-    return `COPY ${t}(id, name, filePath, startLine, endLine, content, description, language, qualifiedName, moduleQualifiedName, constType, constValue, isErrorCode, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+    return `COPY ${t}(${copyColumns(MOVE_CONST_COLUMNS)}) FROM "${filePath}" ${COPY_CSV_OPTS}`;
   }
   if (table === 'Module') {
-    return `COPY ${t}(id, name, filePath, startLine, endLine, content, description, language, qualifiedName, moduleAddress, attributes, locationFidelity) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+    return `COPY ${t}(${copyColumns(MOVE_MODULE_COLUMNS)}) FROM "${filePath}" ${COPY_CSV_OPTS}`;
   }
   // TypeScript/JS code element tables have isExported; multi-language tables do not
   if (TABLES_WITH_EXPORTED.has(table)) {

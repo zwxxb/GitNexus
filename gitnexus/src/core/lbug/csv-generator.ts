@@ -19,6 +19,15 @@ import type { GraphNode, GraphRelationship } from 'gitnexus-shared';
 import { KnowledgeGraph } from '../graph/types.js';
 import { NodeTableName } from './schema.js';
 import { parseTruthyEnv } from '../ingestion/utils/env.js';
+import {
+  CODE_ELEMENT_COLUMNS,
+  MOVE_CONST_COLUMNS,
+  MOVE_ENUM_VARIANT_COLUMNS,
+  MOVE_FUNCTION_COLUMNS,
+  MOVE_MODULE_COLUMNS,
+  MOVE_STRUCT_LIKE_COLUMNS,
+  MULTI_LANG_BASE_COLUMNS,
+} from './move-columns.js';
 
 /**
  * Deterministic output ordering — optional (out-of-core / windowed-resolve
@@ -292,30 +301,9 @@ export const streamAllCSVsToDisk = async (
     'id,name,filePath,content',
   );
   const folderWriter = new BufferedCSVWriter(path.join(csvDir, 'folder.csv'), 'id,name,filePath');
-  const codeElementHeader = 'id,name,filePath,startLine,endLine,isExported,content,description';
+  const codeElementHeader = CODE_ELEMENT_COLUMNS.join(',');
   // Function carries Move compiler facts (no-op columns for non-Move functions).
-  const functionHeader = [
-    codeElementHeader,
-    'language',
-    'qualifiedName',
-    'moduleQualifiedName',
-    'visibility',
-    'visibilityModifier',
-    'isEntry',
-    'isView',
-    'isInitModule',
-    'isInline',
-    'isNative',
-    'hasSpec',
-    'parameterCount',
-    'returnType',
-    'acquires',
-    'usedTypes',
-    'attributes',
-    'typeParamsJson',
-    'expectedFailureJson',
-    'locationFidelity',
-  ].join(',');
+  const functionHeader = MOVE_FUNCTION_COLUMNS.join(',');
   const functionWriter = new BufferedCSVWriter(path.join(csvDir, 'function.csv'), functionHeader);
   const classWriter = new BufferedCSVWriter(path.join(csvDir, 'class.csv'), codeElementHeader);
   const interfaceWriter = new BufferedCSVWriter(
@@ -357,29 +345,12 @@ export const streamAllCSVsToDisk = async (
   );
 
   // Multi-language node types share the same CSV shape (no isExported column)
-  const multiLangHeader = 'id,name,filePath,startLine,endLine,content,description';
+  const multiLangHeader = MULTI_LANG_BASE_COLUMNS.join(',');
   // Move struct/enum/const/module/enum-variant carry compiler-sourced facts.
-  const moveStructLikeHeader = [
-    multiLangHeader,
-    'language', 'qualifiedName', 'moduleQualifiedName', 'moduleAddress',
-    'abilities', 'isResource', 'isEvent',
-    'fieldList', 'attributes', 'typeParamsJson',
-    'moveDeclarationKind', 'locationFidelity',
-  ].join(',');
-  const moveConstHeader = [
-    multiLangHeader,
-    'language', 'qualifiedName', 'moduleQualifiedName',
-    'constType', 'constValue', 'isErrorCode', 'locationFidelity',
-  ].join(',');
-  const moveEnumVariantHeader = [
-    multiLangHeader,
-    'language', 'qualifiedName', 'parentEnum', 'moduleQualifiedName',
-    'variantKind', 'fieldsJson', 'attributes', 'locationFidelity',
-  ].join(',');
-  const moveModuleHeader = [
-    multiLangHeader,
-    'language', 'qualifiedName', 'moduleAddress', 'attributes', 'locationFidelity',
-  ].join(',');
+  const moveStructLikeHeader = MOVE_STRUCT_LIKE_COLUMNS.join(',');
+  const moveConstHeader = MOVE_CONST_COLUMNS.join(',');
+  const moveEnumVariantHeader = MOVE_ENUM_VARIANT_COLUMNS.join(',');
+  const moveModuleHeader = MOVE_MODULE_COLUMNS.join(',');
   const MULTI_LANG_TYPES = [
     'Struct',
     'Enum',
