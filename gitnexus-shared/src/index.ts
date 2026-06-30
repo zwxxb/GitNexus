@@ -183,20 +183,3 @@ export {
   stripGitSuffix,
 } from './integrations/understand-quickly.js';
 export type { UqDispatchPayload } from './integrations/understand-quickly.js';
-
-// Understand-* artefacts (layers, tour, ports, cross-component graph, diff overlay)
-export type {
-  Layer,
-  TourStep,
-  ManifestKind,
-  Component,
-  PortKind,
-  Port,
-  ComponentPorts,
-  CrossComponentEdgeType,
-  CrossComponentEdge,
-  CrossComponentGraphComponent,
-  CrossComponentGraph,
-  DiffOverlay,
-  UnderstandStats,
-} from './understand-types.js';
