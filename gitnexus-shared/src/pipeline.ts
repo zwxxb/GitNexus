@@ -14,11 +14,6 @@ export type PipelinePhase =
   | 'scopeResolution'
   | 'communities'
   | 'processes'
-  | 'understandComponents'
-  | 'understandLayers'
-  | 'understandTour'
-  | 'understandPorts'
-  | 'understandCrossComponent'
   | 'enriching'
   | 'complete'
   | 'error';
